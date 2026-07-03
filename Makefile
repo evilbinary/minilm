@@ -2,14 +2,14 @@
 
 # 默认参数
 ARGS ?=
-# 语言: en=英文, zh=中文, both=中英混合
+# 语言: en=英文, zh=中文, both=中英混合（不要用 LANG，和系统环境变量冲突）
 MODEL_LANG ?= both
 
 help:
 	@echo "Mini GPT — Makefile"
 	@echo ""
 	@echo "用法:"
-	@echo "  make data        下载数据集（默认英文）"
+	@echo "  make data        下载数据集"
 	@echo "  make train       训练模型"
 	@echo "  make resume      从 checkpoint 续训"
 	@echo "  make generate    生成文本"
@@ -18,13 +18,13 @@ help:
 	@echo "  make clean       删除训练产物"
 	@echo ""
 	@echo "语言选择:"
-	@echo "  make LANG=en <cmd>     英文（默认）"
-	@echo "  make LANG=zh <cmd>     中文（西游记）"
-	@echo "  make LANG=both <cmd>   中英混合训练"
+	@echo "  make MODEL_LANG=en <cmd>    英文"
+	@echo "  make MODEL_LANG=zh <cmd>    中文（西游记）"
+	@echo "  make MODEL_LANG=both <cmd>  中英混合（默认）"
 	@echo ""
 	@echo "传参示例:"
-	@echo "  make LANG=both train  ARGS=\"--max-iters 5000\""
-	@echo "  make LANG=both chat   ARGS=\"--temperature 0.7\""
+	@echo "  make MODEL_LANG=en train  ARGS=\"--max-iters 5000\""
+	@echo "  make MODEL_LANG=both chat ARGS=\"--temperature 0.7\""
 
 data:
 	python minigpt.py --download --lang $(MODEL_LANG)
