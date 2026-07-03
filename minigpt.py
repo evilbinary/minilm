@@ -258,7 +258,15 @@ class CharTokenizer:
         return "".join(self.itos.get(i, "") for i in ids if i not in (0, 1))
 
 
-DATA_PATH = "data/tinyshakespeare.txt"
+DATA_DIR = "data"
+DATA_FILES = {
+    "en": "data/tinyshakespeare.txt",
+    "zh": "data/xyj.txt",
+}
+DATA_URLS = {
+    "en": "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt",
+    "zh": "",
+}
 CKPT_PATH = "minigpt_checkpoint.pt"
 
 
@@ -283,26 +291,44 @@ def load_checkpoint(path: str, model: MiniGPT, optimizer=None, device="cpu"):
     return ckpt["step"], ckpt["best_loss"]
 
 
-def get_data() -> str:
-    """从本地文件读取 Tiny Shakespeare 数据集"""
-    try:
-        with open(DATA_PATH, "r", encoding="utf-8") as f:
-            return f.read()
-    except FileNotFoundError:
-        print(f"数据文件 {DATA_PATH} 不存在！")
-        print(f"请先运行 python minigpt.py --download 下载数据集")
-        raise
+def get_data_paths(lang: str = "en") -> list[str]:
+    """获取数据文件路径列表"""
+    if lang == "both":
+        return [DATA_FILES["en"], DATA_FILES["zh"]]
+    return [DATA_FILES.get(lang, DATA_FILES["en"])]
 
 
-def download_data():
-    """下载 Tiny Shakespeare 数据集到本地"""
+def get_data(lang: str = "en") -> str:
+    """从本地文件读取数据集（支持多语言合并）"""
+    paths = get_data_paths(lang)
+    texts = []
+    for path in paths:
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                texts.append(f.read())
+        except FileNotFoundError:
+            lang_name = {"en": "英文", "zh": "中文", "both": "中英文"}.get(lang, lang)
+            print(f"数据文件 {path} 不存在！")
+            print(f"请先下载数据集后再试")
+            raise
+    return "\n".join(texts)
+
+
+def download_data(lang: str = "en"):
+    """下载数据集到本地"""
     import urllib.request
     import os
-    url = "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"
-    os.makedirs("data", exist_ok=True)
-    print(f"正在下载 Tiny Shakespeare 数据集...")
-    urllib.request.urlretrieve(url, DATA_PATH)
-    print(f"已保存到 {DATA_PATH}")
+    os.makedirs(DATA_DIR, exist_ok=True)
+    for key in ([lang] if lang != "both" else ["en", "zh"]):
+        url = DATA_URLS.get(key, "")
+        if not url:
+            print(f"  [{key}] 数据集需手动下载，请放入 {DATA_FILES[key]}")
+            continue
+        path = DATA_FILES[key]
+        name = {"en": "Tiny Shakespeare", "zh": "西游记"}.get(key, key)
+        print(f"正在下载 {name} 数据集...")
+        urllib.request.urlretrieve(url, path)
+        print(f"  已保存到 {path}")
 
 
 def make_dataloaders(text: str, tokenizer: CharTokenizer,
@@ -334,6 +360,7 @@ def train(model: MiniGPT, train_loader, val_loader,
           max_iters: int = 2000, lr: float = 1e-3,
           eval_interval: int = 200, log_interval: int = 10,
           resume_from: Optional[str] = None,
+          ckpt_path: str = CKPT_PATH,
           device: str = "cpu"):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
@@ -380,8 +407,7 @@ def train(model: MiniGPT, train_loader, val_loader,
 
             if loss.item() < best_loss:
                 best_loss = loss.item()
-            # 保存 checkpoint
-            save_checkpoint(CKPT_PATH, model, optimizer, step, best_loss)
+            save_checkpoint(ckpt_path, model, optimizer, step, best_loss)
 
     print(f"{'='*65}")
     print("训练完成!")
@@ -407,19 +433,27 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=40)
     parser.add_argument("--resume", action="store_true", help="从 checkpoint 继续训练")
+    parser.add_argument("--lang", choices=["en", "zh", "both"], default="en", help="语言: en=英文, zh=中文, both=中英混合")
     parser.add_argument("--device", default=("cuda" if torch.cuda.is_available() else "cpu"))
     args = parser.parse_args()
 
+    # 语言相关配置
+    lang = args.lang
+    ckpt_path = f"minigpt_{lang}_checkpoint.pt"
+    model_path = f"minigpt_{lang}.pt"
+    lang_prompts = {"en": "O Romeo", "zh": "话说唐僧", "both": "Hello 你好"}
+    default_prompt = lang_prompts.get(lang, "O Romeo")
+
     # 仅下载
     if args.download:
-        download_data()
+        download_data(lang)
         return
 
     do_train = args.train or not args.generate
     do_generate = args.generate or not args.train
 
-    # 数据（从本地文件读取）
-    text = get_data()
+    # 数据
+    text = get_data(lang)
     tokenizer = CharTokenizer(text)
 
     config = GPTConfig(
@@ -438,24 +472,24 @@ def main():
         train_loader, val_loader = make_dataloaders(text, tokenizer, config, args.batch_size)
         train(model, train_loader, val_loader, args.max_iters, args.lr,
               eval_interval=args.eval_interval, log_interval=args.log_interval,
-              resume_from=CKPT_PATH if args.resume else None,
-              device=args.device)
-        # 保存最终模型（仅权重，供生成用）
-        torch.save(model.state_dict(), "minigpt.pt")
-        print(f"最终模型已保存到 minigpt.pt")
+              resume_from=ckpt_path if args.resume else None,
+              ckpt_path=ckpt_path, device=args.device)
+        torch.save(model.state_dict(), model_path)
+        print(f"最终模型已保存到 {model_path}")
 
     if do_generate:
         if not do_train:
             try:
-                model.load_state_dict(torch.load("minigpt.pt", map_location=args.device))
+                model.load_state_dict(torch.load(model_path, map_location=args.device))
             except FileNotFoundError:
-                print("未找到 minigpt.pt，使用随机参数生成")
+                print(f"未找到 {model_path}，使用随机参数生成")
 
-        prompt_ids = torch.tensor(tokenizer.encode(args.prompt), dtype=torch.long).unsqueeze(0).to(args.device)
+        prompt = args.prompt or default_prompt
+        prompt_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.long).unsqueeze(0).to(args.device)
         out_ids = model.generate(prompt_ids, args.max_new_tokens, args.temperature, args.top_k, tokenizer.eos_id)
         generated = tokenizer.decode(out_ids[0].tolist())
 
-        print(f"\nPrompt: {args.prompt}")
+        print(f"\nPrompt: {prompt}")
         print("─" * 50)
         print(generated)
         print("─" * 50)

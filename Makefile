@@ -2,52 +2,48 @@
 
 # 默认参数
 ARGS ?=
-
-# 数据集
-DATA_FILE = data/tinyshakespeare.txt
+# 语言: en=英文, zh=中文, both=中英混合
+MODEL_LANG ?= both
 
 help:
 	@echo "Mini GPT — Makefile"
 	@echo ""
 	@echo "用法:"
-	@echo "  make data        下载数据集"
-	@echo "  make train       训练模型 (默认 1000 步)"
+	@echo "  make data        下载数据集（默认英文）"
+	@echo "  make train       训练模型"
 	@echo "  make resume      从 checkpoint 续训"
 	@echo "  make generate    生成文本"
 	@echo "  make chat        交互式生成"
 	@echo "  make all         下载 → 训练 → 生成"
 	@echo "  make clean       删除训练产物"
 	@echo ""
+	@echo "语言选择:"
+	@echo "  make LANG=en <cmd>     英文（默认）"
+	@echo "  make LANG=zh <cmd>     中文（西游记）"
+	@echo "  make LANG=both <cmd>   中英混合训练"
+	@echo ""
 	@echo "传参示例:"
-	@echo "  make train   ARGS=\"--max-iters 5000 --lr 5e-4\""
-	@echo "  make resume  ARGS=\"--max-iters 3000\""
-	@echo "  make generate ARGS=\"--prompt \\\"To be\\\" --temperature 0.6\""
-	@echo "  make chat    ARGS=\"--temperature 0.7 --top-k 30\""
+	@echo "  make LANG=both train  ARGS=\"--max-iters 5000\""
+	@echo "  make LANG=both chat   ARGS=\"--temperature 0.7\""
 
-data: $(DATA_FILE)
+data:
+	python minigpt.py --download --lang $(MODEL_LANG)
 
-$(DATA_FILE):
-	python minigpt.py --download
-
-train: $(DATA_FILE)
-	python minigpt.py --train $(ARGS)
+train: data
+	python minigpt.py --train --lang $(MODEL_LANG) $(ARGS)
 
 resume:
-	python minigpt.py --train --resume $(ARGS)
+	python minigpt.py --train --resume --lang $(MODEL_LANG) $(ARGS)
 
 generate:
-	python minigpt.py --generate $(ARGS)
+	python minigpt.py --generate --lang $(MODEL_LANG) $(ARGS)
 
 chat:
-	python chat.py $(ARGS)
+	python chat.py --lang $(MODEL_LANG) $(ARGS)
 
 all: data train generate
 
 clean:
-	rm -f minigpt.pt minigpt_checkpoint.pt
+	rm -f minigpt_*.pt
 	rm -rf __pycache__
 	@echo "已清理训练产物"
-
-clean-all: clean
-	rm -f $(DATA_FILE)
-	@echo "已清理所有文件（含数据集）"
