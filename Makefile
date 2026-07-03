@@ -1,7 +1,9 @@
 .PHONY: data train resume generate chat all clean help
 
 # 默认参数
-ARGS ?= --preset 25M --max-iters 1000
+TRAIN_ARGS ?= --preset 25M --max-iters 1000
+RESUME_ARGS ?= --preset 25M --max-iters 2000
+CHAT_ARGS ?=
 # 语言: en=英文, zh=中文, both=中英混合（不要用 LANG，和系统环境变量冲突）
 MODEL_LANG ?= both
 
@@ -19,27 +21,27 @@ help:
 	@echo ""
 	@echo "语言选择:"
 	@echo "  make MODEL_LANG=en <cmd>    英文"
-	@echo "  make MODEL_LANG=zh <cmd>    中文（西游记）"
+	@echo "  make MODEL_LANG=zh <cmd>    中文"
 	@echo "  make MODEL_LANG=both <cmd>  中英混合（默认）"
 	@echo ""
-	@echo "传参示例:"
-	@echo "  make MODEL_LANG=en train  ARGS=\"--max-iters 5000\""
-	@echo "  make MODEL_LANG=both chat ARGS=\"--temperature 0.7\""
+	@echo "示例:"
+	@echo "  make train  TRAIN_ARGS=\"--preset 16M --max-iters 5000\""
+	@echo "  make chat   CHAT_ARGS=\"--temperature 0.7\""
 
 data:
 	python minigpt.py --download --lang $(MODEL_LANG)
 
 train: data
-	python minigpt.py --train --lang $(MODEL_LANG) $(ARGS)
+	python minigpt.py --train --lang $(MODEL_LANG) $(TRAIN_ARGS)
 
 resume:
-	python minigpt.py --train --resume --lang $(MODEL_LANG) $(ARGS)
+	python minigpt.py --train --resume --lang $(MODEL_LANG) $(RESUME_ARGS)
 
 generate:
-	python minigpt.py --generate --lang $(MODEL_LANG) $(ARGS)
+	python minigpt.py --generate --lang $(MODEL_LANG) $(TRAIN_ARGS)
 
 chat:
-	python chat.py --lang $(MODEL_LANG) $(ARGS)
+	python chat.py --lang $(MODEL_LANG) $(CHAT_ARGS)
 
 all: data train generate
 

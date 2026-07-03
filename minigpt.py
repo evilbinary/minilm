@@ -384,8 +384,7 @@ def train(model: MiniGPT, train_loader, val_loader,
         progress = (step - warmup_iters - hold_iters) / max(1, decay_steps)
         return lr * 0.1 + 0.9 * lr * (1 + _math.cos(_math.pi * progress)) / 2
 
-    print(f"\n设备: {device}")
-    print(f"参数量: {sum(p.numel() for p in model.parameters()):,}")
+    print(f"设备: {device}")
     print(f"起始步: {start_step}, 目标步数: {max_iters}")
     print(f"{'='*65}")
     print(f"{'Iter':>6} | {'Train Loss':>10} | {'Val PPL':>8} | {'Time':>8} | {'LR':>10}")
@@ -495,6 +494,14 @@ def main():
                            preset=args.preset, **overrides)
 
     model = MiniGPT(config).to(args.device)
+
+    # 打印模型参数摘要
+    n_params = sum(p.numel() for p in model.parameters())
+    print(f"\n{'='*54}")
+    print(f"  模型: {config.d_model}x{config.n_layers}  |  {n_params/1e6:.1f}M 参数")
+    print(f"  结构: d_model={config.d_model}  n_layers={config.n_layers}")
+    print(f"         n_heads={config.n_heads}  d_ff={config.d_ff}  dropout={config.dropout}")
+    print(f"{'='*54}\n")
 
     if do_train:
         # 训练参数：config.py 默认值 + CLI 覆盖
