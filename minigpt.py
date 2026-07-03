@@ -18,6 +18,7 @@ import torch.nn as nn
 import torch.nn.functional as F
 import math
 import time
+import os
 from dataclasses import dataclass
 from typing import Optional
 
@@ -267,7 +268,7 @@ DATA_URLS = {
     "en": "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt",
     "zh": "",
 }
-CKPT_PATH = "minigpt_checkpoint.pt"
+CKPT_PATH = "checkpoint/minigpt_checkpoint.pt"
 
 
 def save_checkpoint(path: str, model: MiniGPT, optimizer, step: int, best_loss: float):
@@ -439,8 +440,9 @@ def main():
 
     # 语言相关配置
     lang = args.lang
-    ckpt_path = f"minigpt_{lang}_checkpoint.pt"
-    model_path = f"minigpt_{lang}.pt"
+    os.makedirs("checkpoint", exist_ok=True)
+    ckpt_path = f"checkpoint/minigpt_{lang}_checkpoint.pt"
+    model_path = f"checkpoint/minigpt_{lang}.pt"
     lang_prompts = {"en": "O Romeo", "zh": "话说唐僧", "both": "Hello 你好"}
     default_prompt = lang_prompts.get(lang, "O Romeo")
 

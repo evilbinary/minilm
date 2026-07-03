@@ -44,6 +44,6 @@ chat:
 all: data train generate
 
 clean:
-	rm -f minigpt_*.pt
+	rm -rf checkpoint
 	rm -rf __pycache__
 	@echo "已清理训练产物"

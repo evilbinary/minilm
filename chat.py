@@ -30,8 +30,8 @@ def load_model(lang: str = "en", device: str = "cpu"):
     model = MiniGPT(config).to(device)
 
     # 尝试加载模型权重
-    model_path = f"minigpt_{lang}.pt"
-    ckpt_path = f"minigpt_{lang}_checkpoint.pt"
+    model_path = f"checkpoint/minigpt_{lang}.pt"
+    ckpt_path = f"checkpoint/minigpt_{lang}_checkpoint.pt"
     loaded = False
     for path in [model_path, ckpt_path]:
         try:
