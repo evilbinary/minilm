@@ -1,54 +1,78 @@
 """
 Chat — 交互式文本生成。
 
-和训练好的 Mini GPT 对话（字符级续写风格）。
+从 checkpoint 自动读取模型配置，无需硬编码架构参数。
 
 Usage:
-    python chat.py                          # 英文（默认）
-    python chat.py --lang zh                # 中文
-    python chat.py --lang zh --temperature 0.7 --top-k 30
+    python chat.py                     # 英文
+    python chat.py --lang zh           # 中文
+    python chat.py --lang both         # 中英混合
 """
 
-from minigpt import MiniGPT, GPTConfig, CharTokenizer, get_data
+from minigpt import MiniGPT, CharTokenizer, get_data
+from config import GPTConfig, get_config
 import torch
+import os
+
+
+def _infer_config(state_dict: dict) -> GPTConfig:
+    """从 state_dict 推断模型架构（兼容旧版 checkpoint）"""
+    # 通过 lm_head 输入维度反推 d_model
+    lm_w = state_dict["lm_head.weight"]            # (vocab, d_model)
+    vocab, d_model = lm_w.shape
+
+    # 通过 qkv 权重反推 n_heads
+    qkv_w = state_dict["blocks.0.attn.qkv.weight"]  # (3*d_model, d_model)
+    assert qkv_w.shape[1] == d_model
+    head_dim = qkv_w.shape[0] // 3 // 8              # 假设 8 头，算 head_dim
+    # 找最接近的整数头数
+    for nh in [4, 6, 8, 12, 16]:
+        if (3 * d_model) % (3 * nh) == 0:
+            break
+
+    # 通过 FFN 权重反推 d_ff
+    ffn_w = state_dict["blocks.0.ffn.w1.weight"]     # (d_ff, d_model)
+    d_ff = ffn_w.shape[0]
+
+    # 层数
+    n_layers = sum(1 for k in state_dict if k.startswith("blocks.") and k.endswith(".ln1.weight"))
+
+    return GPTConfig(
+        vocab_size=vocab,
+        d_model=d_model,
+        n_layers=n_layers,
+        n_heads=8 if d_model % 8 == 0 else 4,
+        d_ff=d_ff,
+    )
 
 
 def load_model(lang: str = "en", device: str = "cpu"):
-    """加载训练好的模型和 tokenizer"""
+    """加载训练好的模型（配置从 checkpoint 读取）"""
     text = get_data(lang)
     tokenizer = CharTokenizer(text)
 
-    config = GPTConfig(
-        vocab_size=tokenizer.vocab_size,
-        max_seq_len=128,
-        d_model=192,
-        n_layers=6,
-        n_heads=6,
-        d_ff=768,
-    )
-
-    model = MiniGPT(config).to(device)
-
-    # 尝试加载模型权重
-    model_path = f"checkpoint/minigpt_{lang}.pt"
     ckpt_path = f"checkpoint/minigpt_{lang}_checkpoint.pt"
-    loaded = False
+    model_path = f"checkpoint/minigpt_{lang}.pt"
+    vocab_size = tokenizer.vocab_size
+
     for path in [model_path, ckpt_path]:
-        try:
-            ckpt = torch.load(path, map_location=device, weights_only=False)
-            if "model_state_dict" in ckpt:
-                model.load_state_dict(ckpt["model_state_dict"])
-            else:
-                model.load_state_dict(ckpt)
-            print(f"  已加载: {path}")
-            loaded = True
-            break
-        except FileNotFoundError:
+        if not os.path.exists(path):
             continue
+        data = torch.load(path, map_location=device, weights_only=False)
+        state_dict = data.get("model_state_dict", data)
 
-    if not loaded:
-        print("  ⚠ 未找到训练好的模型，使用随机参数（效果较差）")
+        config = data.get("config", None)
+        if config is None:
+            config = _infer_config(state_dict)
+            print(f"  ⚠ 从权重反推配置: d={config.d_model} l={config.n_layers} f={config.d_ff}")
 
+        model = MiniGPT(config).to(device)
+        model.load_state_dict(state_dict)
+        print(f"  已加载: {path}")
+        return model, tokenizer
+
+    model = MiniGPT(get_config(vocab_size=vocab_size)).to(device)
+    print("  ⚠ 未找到训练好的模型，使用随机参数")
     return model, tokenizer
 
 
@@ -91,7 +115,6 @@ def main():
         if not prompt:
             continue
 
-        # 命令
         if prompt.startswith("/"):
             parts = prompt.split()
             cmd = parts[0]
@@ -109,7 +132,6 @@ def main():
                 print(f"  命令: /temp N, /topk N, /quit")
                 continue
 
-        # 编码 + 生成
         prompt_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.long).unsqueeze(0).to(device)
 
         with torch.no_grad():

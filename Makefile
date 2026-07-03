@@ -1,7 +1,7 @@
 .PHONY: data train resume generate chat all clean help
 
 # 默认参数
-ARGS ?=
+ARGS ?= --preset 25M --max-iters 1000
 # 语言: en=英文, zh=中文, both=中英混合（不要用 LANG，和系统环境变量冲突）
 MODEL_LANG ?= both
 

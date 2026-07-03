@@ -19,23 +19,9 @@ import torch.nn.functional as F
 import math
 import time
 import os
-from dataclasses import dataclass
 from typing import Optional
 
-
-# ═══════════════════════════════════════════════════════
-#  1. 配置
-# ═══════════════════════════════════════════════════════
-
-@dataclass
-class GPTConfig:
-    vocab_size: int = 100      # 词表大小
-    max_seq_len: int = 128     # 最大序列长度
-    d_model: int = 128         # 模型维度
-    n_layers: int = 4          # Transformer 层数
-    n_heads: int = 4           # 注意力头数
-    d_ff: int = 512            # FFN 隐藏层维度
-    dropout: float = 0.1       # Dropout
+from config import GPTConfig, TrainConfig, get_config
 
 
 # ═══════════════════════════════════════════════════════
@@ -278,6 +264,7 @@ def save_checkpoint(path: str, model: MiniGPT, optimizer, step: int, best_loss: 
         "optimizer_state_dict": optimizer.state_dict(),
         "step": step,
         "best_loss": best_loss,
+        "config": model.config,
     }, path)
     print(f"  [Checkpoint] 已保存到 {path} (step={step})")
 
@@ -308,7 +295,6 @@ def get_data(lang: str = "en") -> str:
             with open(path, "r", encoding="utf-8") as f:
                 texts.append(f.read())
         except FileNotFoundError:
-            lang_name = {"en": "英文", "zh": "中文", "both": "中英文"}.get(lang, lang)
             print(f"数据文件 {path} 不存在！")
             print(f"请先下载数据集后再试")
             raise
@@ -316,33 +302,41 @@ def get_data(lang: str = "en") -> str:
 
 
 def download_data(lang: str = "en"):
-    """下载数据集到本地"""
+    """下载数据集到本地（已有则跳过）"""
     import urllib.request
     import os
     os.makedirs(DATA_DIR, exist_ok=True)
     for key in ([lang] if lang != "both" else ["en", "zh"]):
-        url = DATA_URLS.get(key, "")
-        if not url:
-            print(f"  [{key}] 数据集需手动下载，请放入 {DATA_FILES[key]}")
-            continue
         path = DATA_FILES[key]
         name = {"en": "Tiny Shakespeare", "zh": "西游记"}.get(key, key)
-        print(f"正在下载 {name} 数据集...")
+        if os.path.exists(path):
+            print(f"  [{key}] {name} 已存在: {path}")
+            continue
+        url = DATA_URLS.get(key, "")
+        if not url:
+            print(f"  [{key}] {name} 未找到，请手动放入 {path}")
+            continue
+        print(f"  正在下载 {name}...")
         urllib.request.urlretrieve(url, path)
-        print(f"  已保存到 {path}")
+        print(f"  已保存 {path}")
 
 
 def make_dataloaders(text: str, tokenizer: CharTokenizer,
                      config: GPTConfig, batch_size: int = 32):
-    """切分训练/验证集，返回迭代器"""
+    """切分训练/验证集（按 segment 打散，保证中英文分布一致）"""
     data = torch.tensor(tokenizer.encode(text), dtype=torch.long)
-    n = int(len(data) * 0.9)
-    train_data, val_data = data[:n], data[n:]
+    # 切分成不重叠的 segment，打散后按 9:1 切分
+    seg_len = config.max_seq_len + 1  # 多 1 留给 target
+    n_seg = len(data) // seg_len
+    data = data[:n_seg * seg_len].view(n_seg, seg_len)
+    indices = torch.randperm(n_seg)
+    n_train = int(n_seg * 0.9)
+    train_seg, val_seg = data[indices[:n_train]], data[indices[n_train:]]
 
     def get_batch(src):
-        ix = torch.randint(len(src) - config.max_seq_len, (batch_size,))
-        x = torch.stack([src[i:i + config.max_seq_len] for i in ix])
-        y = torch.stack([src[i + 1:i + config.max_seq_len + 1] for i in ix])
+        ix = torch.randint(len(src), (batch_size,))
+        x = torch.stack([src[i, :-1] for i in ix])
+        y = torch.stack([src[i, 1:] for i in ix])
         return x, y
 
     class DataLoader:
@@ -350,7 +344,7 @@ def make_dataloaders(text: str, tokenizer: CharTokenizer,
         def __iter__(self): return self
         def __next__(self): return get_batch(self.src)
 
-    return DataLoader(train_data), DataLoader(val_data)
+    return DataLoader(train_seg), DataLoader(val_seg)
 
 
 # ═══════════════════════════════════════════════════════
@@ -364,16 +358,31 @@ def train(model: MiniGPT, train_loader, val_loader,
           ckpt_path: str = CKPT_PATH,
           device: str = "cpu"):
 
-    optimizer = torch.optim.AdamW(model.parameters(), lr=lr)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95))
 
     # 加载 checkpoint
     start_step = 0
     best_loss = float("inf")
     if resume_from is not None:
         start_step, best_loss = load_checkpoint(resume_from, model, optimizer, device)
-        # 把优化器的 lr 重新设一下（因为加载后会覆盖）
+        # 把优化器的 lr 重新设一下
         for g in optimizer.param_groups:
             g["lr"] = lr
+
+    # 三段式学习率: warmup → 恒定 → 余弦衰减
+    warmup_iters = max_iters // 20           # 5% warmup
+    hold_iters = max_iters // 4              # 25% 恒定峰值 LR
+    import math as _math
+
+    def get_lr(step: int) -> float:
+        if step < warmup_iters:
+            return lr * (step + 1) / warmup_iters
+        if step < warmup_iters + hold_iters:
+            return lr
+        # 余弦衰减到 0
+        decay_steps = max_iters - warmup_iters - hold_iters
+        progress = (step - warmup_iters - hold_iters) / max(1, decay_steps)
+        return lr * 0.1 + 0.9 * lr * (1 + _math.cos(_math.pi * progress)) / 2
 
     print(f"\n设备: {device}")
     print(f"参数量: {sum(p.numel() for p in model.parameters()):,}")
@@ -391,7 +400,12 @@ def train(model: MiniGPT, train_loader, val_loader,
 
         optimizer.zero_grad()
         loss.backward()
+        torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # 梯度裁剪
         optimizer.step()
+
+        # 更新学习率
+        for g in optimizer.param_groups:
+            g["lr"] = get_lr(step)
 
         # 每 log_interval 步打印训练 loss
         if step % log_interval == 0 or step == max_iters - 1:
@@ -424,9 +438,9 @@ def main():
     parser.add_argument("--download", action="store_true", help="下载数据集")
     parser.add_argument("--train", action="store_true", help="训练")
     parser.add_argument("--generate", action="store_true", help="生成")
-    parser.add_argument("--max-iters", type=int, default=1000)
-    parser.add_argument("--lr", type=float, default=3e-4)
-    parser.add_argument("--batch-size", type=int, default=64)
+    parser.add_argument("--max-iters", type=int, default=None)
+    parser.add_argument("--lr", type=float, default=None)
+    parser.add_argument("--batch-size", type=int, default=None)
     parser.add_argument("--log-interval", type=int, default=10, help="每 N 步打印训练 loss")
     parser.add_argument("--eval-interval", type=int, default=200, help="每 N 步计算验证集 PPL")
     parser.add_argument("--prompt", type=str, default="O Romeo")
@@ -435,6 +449,11 @@ def main():
     parser.add_argument("--top-k", type=int, default=40)
     parser.add_argument("--resume", action="store_true", help="从 checkpoint 继续训练")
     parser.add_argument("--lang", choices=["en", "zh", "both"], default="en", help="语言: en=英文, zh=中文, both=中英混合")
+    parser.add_argument("--preset", type=str, default=None, help="模型规格: 4.5M/8.8M/16M/25M/40M")
+    parser.add_argument("--d-model", type=int, default=None, help="模型维度（覆盖 preset）")
+    parser.add_argument("--n-layers", type=int, default=None, help="Transformer 层数")
+    parser.add_argument("--n-heads", type=int, default=None, help="注意力头数")
+    parser.add_argument("--d-ff", type=int, default=None, help="FFN 隐藏层维度")
     parser.add_argument("--device", default=("cuda" if torch.cuda.is_available() else "cpu"))
     args = parser.parse_args()
 
@@ -458,21 +477,35 @@ def main():
     text = get_data(lang)
     tokenizer = CharTokenizer(text)
 
-    config = GPTConfig(
-        vocab_size=tokenizer.vocab_size,
-        max_seq_len=128,
-        d_model=192,
-        n_layers=6,
-        n_heads=6,
-        d_ff=768,
-    )
+    # 构建/加载配置
+    config = None
+    if args.resume and os.path.exists(ckpt_path):
+        ckpt_data = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+        config = ckpt_data.get("config")
+        if config is None:
+            print("  ⚠ checkpoint 中无配置，从权重反推")
+    if config is None:
+        # 从 config.py 读取：preset → CLI 覆盖
+        overrides = {}
+        for k in ["d_model", "n_layers", "n_heads", "d_ff"]:
+            v = getattr(args, k.replace("-", "_"))
+            if v is not None:
+                overrides[k] = v
+        config = get_config(vocab_size=tokenizer.vocab_size,
+                           preset=args.preset, **overrides)
 
     model = MiniGPT(config).to(args.device)
 
     if do_train:
+        # 训练参数：config.py 默认值 + CLI 覆盖
+        tcfg = TrainConfig()
+        max_iters = args.max_iters or tcfg.max_iters
+        lr = args.lr or tcfg.lr
+        batch_size = args.batch_size or tcfg.batch_size
+
         print(f"数据: {len(text)} 字符, 词表: {tokenizer.vocab_size}")
-        train_loader, val_loader = make_dataloaders(text, tokenizer, config, args.batch_size)
-        train(model, train_loader, val_loader, args.max_iters, args.lr,
+        train_loader, val_loader = make_dataloaders(text, tokenizer, config, batch_size)
+        train(model, train_loader, val_loader, max_iters, lr,
               eval_interval=args.eval_interval, log_interval=args.log_interval,
               resume_from=ckpt_path if args.resume else None,
               ckpt_path=ckpt_path, device=args.device)
