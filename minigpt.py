@@ -246,25 +246,29 @@ class CharTokenizer:
 
 
 DATA_DIR = "data"
+# 数据文件列表（每个语言可指定多个文件，全部用于训练）
 DATA_FILES = {
-    "en": "data/tinyshakespeare.txt",
-    "zh": "data/xyj.txt",
+    "en": ["data/tinyshakespeare.txt"],
+    "zh": ["data/xyj.txt", "data/hlm.txt"],  # 西游记 + 红楼梦
 }
 DATA_URLS = {
-    "en": "https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt",
-    "zh": "",
+    "en": ["https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"],
+    "zh": ["", ""],  # 空表示手动下载
 }
 CKPT_PATH = "checkpoint/minigpt_checkpoint.pt"
 
 
-def save_checkpoint(path: str, model: MiniGPT, optimizer, step: int, best_loss: float):
-    """保存 checkpoint（模型 + 优化器 + 训练状态）"""
+def save_checkpoint(path: str, model: MiniGPT, optimizer, step: int, best_loss: float,
+                    data_files: Optional[list] = None, vocab: Optional[dict] = None):
+    """保存 checkpoint（模型 + 优化器 + 训练状态 + 词表）"""
     torch.save({
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
         "step": step,
         "best_loss": best_loss,
         "config": model.config,
+        "data_files": data_files,
+        "vocab": vocab,  # stoi 映射，保证续训时数据一致
     }, path)
     print(f"  [Checkpoint] 已保存到 {path} (step={step})")
 
@@ -280,10 +284,10 @@ def load_checkpoint(path: str, model: MiniGPT, optimizer=None, device="cpu"):
 
 
 def get_data_paths(lang: str = "en") -> list[str]:
-    """获取数据文件路径列表"""
+    """获取数据文件路径列表（展平多文件配置）"""
     if lang == "both":
-        return [DATA_FILES["en"], DATA_FILES["zh"]]
-    return [DATA_FILES.get(lang, DATA_FILES["en"])]
+        return DATA_FILES["en"] + DATA_FILES["zh"]
+    return DATA_FILES.get(lang, DATA_FILES["en"])
 
 
 def get_data(lang: str = "en") -> str:
@@ -307,18 +311,20 @@ def download_data(lang: str = "en"):
     import os
     os.makedirs(DATA_DIR, exist_ok=True)
     for key in ([lang] if lang != "both" else ["en", "zh"]):
-        path = DATA_FILES[key]
-        name = {"en": "Tiny Shakespeare", "zh": "西游记"}.get(key, key)
-        if os.path.exists(path):
-            print(f"  [{key}] {name} 已存在: {path}")
-            continue
-        url = DATA_URLS.get(key, "")
-        if not url:
-            print(f"  [{key}] {name} 未找到，请手动放入 {path}")
-            continue
-        print(f"  正在下载 {name}...")
-        urllib.request.urlretrieve(url, path)
-        print(f"  已保存 {path}")
+        urls = DATA_URLS.get(key, [])
+        paths = DATA_FILES.get(key, [])
+        for i, path in enumerate(paths):
+            fname = os.path.basename(path)
+            if os.path.exists(path):
+                print(f"  [{key}] {fname} 已存在")
+                continue
+            url = urls[i] if i < len(urls) else ""
+            if not url:
+                print(f"  [{key}] {fname} 未找到，请手动放入 {path}")
+                continue
+            print(f"  正在下载 {fname}...")
+            urllib.request.urlretrieve(url, path)
+            print(f"  已保存 {path}")
 
 
 def make_dataloaders(text: str, tokenizer: CharTokenizer,
@@ -355,8 +361,8 @@ def train(model: MiniGPT, train_loader, val_loader,
           max_iters: int = 2000, lr: float = 1e-3,
           eval_interval: int = 200, log_interval: int = 10,
           resume_from: Optional[str] = None,
-          ckpt_path: str = CKPT_PATH,
-          device: str = "cpu"):
+          ckpt_path: str = CKPT_PATH, data_files: Optional[list] = None,
+          vocab: Optional[dict] = None, device: str = "cpu"):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95))
 
@@ -421,7 +427,8 @@ def train(model: MiniGPT, train_loader, val_loader,
 
             if loss.item() < best_loss:
                 best_loss = loss.item()
-            save_checkpoint(ckpt_path, model, optimizer, step, best_loss)
+            save_checkpoint(ckpt_path, model, optimizer, step, best_loss,
+                            data_files=data_files, vocab=vocab)
 
     print(f"{'='*65}")
     print("训练完成!")
@@ -472,19 +479,31 @@ def main():
     do_train = args.train or not args.generate
     do_generate = args.generate or not args.train
 
-    # 数据
-    text = get_data(lang)
-    tokenizer = CharTokenizer(text)
-
-    # 构建/加载配置
+    # 续训时从 checkpoint 读取数据文件列表
+    data_files = None
     config = None
     if args.resume and os.path.exists(ckpt_path):
         ckpt_data = torch.load(ckpt_path, map_location="cpu", weights_only=False)
         config = ckpt_data.get("config")
+        data_files = ckpt_data.get("data_files")
         if config is None:
             print("  ⚠ checkpoint 中无配置，从权重反推")
+
+    # 数据（续训用 checkpoint 记录的数据文件，保证词表一致）
+    if data_files:
+        # 新 checkpoint：使用保存的数据文件列表
+        text = "\n".join(open(f, encoding="utf-8").read() for f in data_files)
+    else:
+        # 旧 checkpoint：使用当前 DATA_FILES，若词表超了就排除 hlM
+        text = get_data(lang)
+        tok = CharTokenizer(text)
+        if config and tok.vocab_size > config.vocab_size:
+            exclude = [f for f in DATA_FILES.get("zh", []) if "hlm" in f]
+            keep = [f for f in get_data_paths(lang) if f not in exclude]
+            text = "\n".join(open(f, encoding="utf-8").read() for f in keep)
+    tokenizer = CharTokenizer(text)
+
     if config is None:
-        # 从 config.py 读取：preset → CLI 覆盖
         overrides = {}
         for k in ["d_model", "n_layers", "n_heads", "d_ff"]:
             v = getattr(args, k.replace("-", "_"))
@@ -495,7 +514,6 @@ def main():
 
     model = MiniGPT(config).to(args.device)
 
-    # 打印模型参数摘要
     n_params = sum(p.numel() for p in model.parameters())
     print(f"\n{'='*54}")
     print(f"  模型: {config.d_model}x{config.n_layers}  |  {n_params/1e6:.1f}M 参数")
@@ -504,7 +522,6 @@ def main():
     print(f"{'='*54}\n")
 
     if do_train:
-        # 训练参数：config.py 默认值 + CLI 覆盖
         tcfg = TrainConfig()
         max_iters = args.max_iters or tcfg.max_iters
         lr = args.lr or tcfg.lr
@@ -515,7 +532,8 @@ def main():
         train(model, train_loader, val_loader, max_iters, lr,
               eval_interval=args.eval_interval, log_interval=args.log_interval,
               resume_from=ckpt_path if args.resume else None,
-              ckpt_path=ckpt_path, device=args.device)
+              ckpt_path=ckpt_path, data_files=data_files,
+              vocab=tokenizer.stoi, device=args.device)
         torch.save(model.state_dict(), model_path)
         print(f"最终模型已保存到 {model_path}")
 
