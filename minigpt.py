@@ -269,7 +269,7 @@ CKPT_PATH = "checkpoint/minigpt_checkpoint.pt"
 
 def save_checkpoint(path: str, model: MiniGPT, optimizer, step: int, best_loss: float,
                     data_files: Optional[list] = None, vocab: Optional[dict] = None):
-    """保存 checkpoint（模型 + 优化器 + 训练状态 + 词表）"""
+    """保存 checkpoint（仅含优化器状态，用于续训）"""
     torch.save({
         "model_state_dict": model.state_dict(),
         "optimizer_state_dict": optimizer.state_dict(),
@@ -277,9 +277,15 @@ def save_checkpoint(path: str, model: MiniGPT, optimizer, step: int, best_loss: 
         "best_loss": best_loss,
         "config": model.config,
         "data_files": data_files,
-        "vocab": vocab,  # stoi 映射，保证续训时数据一致
+        "vocab": vocab,
     }, path)
-    print(f"  [Checkpoint] 已保存到 {path} (step={step})")
+    print(f"  [Checkpoint] 已保存 {path} (step={step})")
+
+
+def save_model(model: MiniGPT, path: str):
+    """保存模型权重（仅权重，用于推理）"""
+    torch.save(model.state_dict(), path)
+    print(f"  [Model] 已保存 {path}")
 
 
 def load_checkpoint(path: str, model: MiniGPT, optimizer=None, device="cpu"):
@@ -559,6 +565,10 @@ def train(model: MiniGPT, train_loader, val_loader,
                 best_loss = loss.item()
             save_checkpoint(ckpt_path, model, optimizer, step, best_loss,
                             data_files=data_files, vocab=vocab)
+            # 模型权重单独保存（每 2000 步一次）
+            if step % 2000 == 0 or step == max_iters - 1:
+                model_path = ckpt_path.replace("_checkpoint.pt", ".pt")
+                save_model(model, model_path)
 
     print(f"{'='*65}")
     print("训练完成!")
@@ -655,7 +665,8 @@ def main():
     elif args.mode == "pretrain":
         # 预训练：只用小说 + 纯文本 jsonl（排除超大对话文件）
         exclude = {"sft_t2t_mini.jsonl", "agent_rl.jsonl", "agent_rl_math.jsonl",
-                   "yuki_ruozhiba_1.5k.jsonl"}
+                   "yuki_ruozhiba_1.5k.jsonl", "dialogue_train.jsonl.txt",
+                   "dialogue_train.txt", "dialogue_zh.txt", "pretrain_text.txt"}
         paths = glob.glob("data/*.jsonl") + glob.glob("data/*.txt")
         paths = [p for p in paths if os.path.basename(p) not in exclude]
         data_files = paths

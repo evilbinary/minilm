@@ -81,11 +81,14 @@ SIMPLE_ZH_DIALOGUES = [
 
 
 def format_dialogue(messages: list[dict]) -> str:
-    """将对话列表格式化为训练文本"""
+    """将对话列表格式化为一行训练文本（system/user→<|user|>, assistant→<|assistant|>）"""
     parts = []
     for msg in messages:
-        role = "<|user|>" if msg["role"] == "user" else "<|assistant|>"
-        parts.append(f"{role}{msg['content']}<|end|>")
+        role = msg["role"]
+        tag = "<|assistant|>" if role == "assistant" else "<|user|>"
+        content = msg["content"].replace("\n", " ").replace("\r", " ")
+        if content.strip():
+            parts.append(f"{tag}{content}<|end|>")
     return "".join(parts)
 
 
