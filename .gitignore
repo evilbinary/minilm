@@ -6,3 +6,5 @@
 Makefile
 data/dialogue_train.txt
 data/dialogue_train.jsonl.txt
+data/agent_rl_math.jsonl
+data/*

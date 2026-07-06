@@ -1,94 +1,64 @@
-.PHONY: data train resume generate chat tokenizer dialogue dialogue-resume chat-dialogue combined chat-combined all clean help
+.PHONY: help tokenizer pretrain sft chat-pretrain chat-sft clean
 
-# ── 续写模型参数 ──
-TRAIN_ARGS ?= --preset 40M --max-iters 1000
-RESUME_ARGS ?= --preset 40M --max-iters 20000
+# ── 通用 ──
 CHAT_ARGS ?= --temperature 0.8
-DEVICE ?= auto
 MODEL_LANG ?= both
 
-# ── 对话模型参数 ──
-DIA_DATA ?= data/dialogue_zh.txt
-DIA_ARGS ?= --preset 100M --max-iters 5000 --batch-size 4
-DIA_RESUME_ARGS ?= --preset 100M --max-iters 200000 --batch-size 4
+# ── 预训练参数 ──
+PRETRAIN_ARGS ?= --preset 100M --max-iters 50000 --batch-size 4
+PRETRAIN_RESUME_ARGS ?= --preset 100M --max-iters 100000 --batch-size 4
 
-# ── 混合模型参数（续写+对话合并）─
-COMBO_ARGS ?= --preset 200M --max-iters 200000 --batch-size 4
+# ── SFT 参数 ──
+SFT_DATA ?= data/sft_t2t_mini.jsonl data/agent_rl.jsonl data/agent_rl_math.jsonl
+SFT_ARGS ?= --preset 100M --max-iters 20000 --batch-size 4
 
 help:
-	@echo "Mini GPT — Makefile"
+	@echo "Mini GPT — 两阶段训练"
 	@echo ""
-	@echo "── 续写模型 ──"
-	@echo "  make data             下载数据集"
-	@echo "  make train            训练续写模型"
-	@echo "  make resume           续训"
-	@echo "  make generate         生成文本"
-	@echo "  make chat             交互式生成"
-	@echo ""
-	@echo "── 对话模型 ──"
+	@echo "── 第一阶段：预训练 ──"
 	@echo "  make tokenizer        训练 BPE tokenizer"
-	@echo "  make dialogue         训练对话模型"
-	@echo "  make dialogue-resume  续训"
-	@echo "  make chat-dialogue    对话聊天"
+	@echo "  make pretrain         在文本数据上预训练"
+	@echo "  make pretrain-resume  续训预训练"
+	@echo "  make chat-pretrain    预训练模型聊天"
 	@echo ""
-	@echo "── 混合模型（续写+对话合并训练）─"
-	@echo "  make combined         用全部 txt/jsonl 训练混合模型"
-	@echo "  make chat-combined    混合模型聊天"
+	@echo "── 第二阶段：SFT 微调 ──"
+	@echo "  make sft              从预训练模型微调对话"
+	@echo "  make sft-resume       续训微调"
+	@echo "  make chat-sft         SFT 模型聊天"
 	@echo ""
 	@echo "── 通用 ──"
-	@echo "  make all              续写全流程"
 	@echo "  make clean            删除训练产物"
 	@echo ""
 	@echo "示例:"
-	@echo "  make dialogue DIA_DATA=data/yuki_ruozhiba_1.5k.jsonl"
-	@echo "  make combined COMBO_ARGS='--max-iters 10000'"
+	@echo "  make pretrain PRETRAIN_ARGS='--max-iters 100000'"
+	@echo "  make sft     SFT_DATA=data/yuki_ruozhiba_1.5k.jsonl"
 
-# ── 续写 ──
-
-data:
-	python minigpt.py --download --lang $(MODEL_LANG)
-
-train: data
-	python minigpt.py --train --lang $(MODEL_LANG) $(TRAIN_ARGS)
-
-resume:
-	python minigpt.py --train --resume --lang $(MODEL_LANG) $(RESUME_ARGS)
-
-generate:
-	python minigpt.py --generate --lang $(MODEL_LANG) $(TRAIN_ARGS)
-
-chat:
-	python chat.py --lang $(MODEL_LANG) $(CHAT_ARGS) $(if $(filter auto,$(DEVICE)),,--device $(DEVICE))
-
-all: data train generate
-
-# ── 对话 ──
+# ── Tokenizer ──
 
 tokenizer:
-	python tokenizer.py --files data/tinyshakespeare.txt data/xyj.txt data/*.jsonl --save checkpoint/tokenizer.json
+	python tokenizer.py --files data/tinyshakespeare.txt data/xyj.txt data/hlm.txt data/agent_rl.jsonl data/yuki_ruozhiba_1.5k.jsonl --save checkpoint/tokenizer.json
 
-dialogue: tokenizer
-	python minigpt.py --train --mode dialogue --dialogue-data $(DIA_DATA) $(DIA_ARGS)
+# ── 预训练 ──
 
-dialogue-resume:
-	python minigpt.py --train --mode dialogue --resume $(DIA_RESUME_ARGS)
+pretrain: tokenizer
+	python minigpt.py --train --mode pretrain $(PRETRAIN_ARGS)
 
-chat-dialogue:
-	python chat.py --mode dialogue $(CHAT_ARGS)
+pretrain-resume:
+	python minigpt.py --train --mode pretrain --resume $(PRETRAIN_RESUME_ARGS)
 
-# ── 混合模型 ──
+chat-pretrain:
+	python chat.py --mode combined $(CHAT_ARGS)
 
-combined: tokenizer
-	python minigpt.py --train --mode combined \
-	  --dialogue-data data/*.jsonl data/*.txt \
-	  $(COMBO_ARGS)
+# ── SFT（从预训练模型微调）──
 
-combined-resume:
-	python minigpt.py --train --mode combined --resume \
-	  --dialogue-data data/*.jsonl data/*.txt \
-	  $(COMBO_ARGS)
+sft: tokenizer
+	python minigpt.py --train --mode sft --resume-from checkpoint/minigpt_pretrain.pt \
+	  --dialogue-data $(SFT_DATA) $(SFT_ARGS)
 
-chat-combined:
+sft-resume:
+	python minigpt.py --train --mode sft --resume $(SFT_RESUME_ARGS)
+
+chat-sft:
 	python chat.py --mode combined $(CHAT_ARGS)
 
 # ── 清理 ──
@@ -96,4 +66,5 @@ chat-combined:
 clean:
 	rm -rf checkpoint
 	rm -rf __pycache__
-	@echo "已清理训练产物"
+	rm -f data/dialogue_train.txt data/dialogue_train.jsonl.txt data/pretrain_text.txt
+	@echo "已清理"

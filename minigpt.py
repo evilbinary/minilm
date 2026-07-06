@@ -515,9 +515,11 @@ def main():
     parser.add_argument("--top-k", type=int, default=40)
     parser.add_argument("--resume", action="store_true", help="从 checkpoint 继续训练")
     parser.add_argument("--lang", choices=["en", "zh", "both"], default="en", help="语言: en=英文, zh=中文, both=中英混合")
-    parser.add_argument("--mode", choices=["completion", "dialogue", "combined"],
+    parser.add_argument("--mode", choices=["completion", "dialogue", "combined", "pretrain", "sft"],
                         default="completion",
-                        help="训练模式: completion=续写, dialogue=对话, combined=混合")
+                        help="训练模式: completion=续写, dialogue=对话, combined=混合, pretrain=预训练, sft=微调")
+    parser.add_argument("--resume-from", type=str, default=None,
+                        help="从指定 checkpoint 加载初始权重（SFT 从 pretrain 加载）")
     parser.add_argument("--dialogue-data", type=str, nargs="+", default=None,
                         help="对话数据文件（多个 JSONL 用空格隔开）")
     parser.add_argument("--preset", type=str, default=None, help="模型规格: 4.5M/16M/40M/100M/200M")
@@ -531,7 +533,8 @@ def main():
     # 语言相关配置
     lang = args.lang
     os.makedirs("checkpoint", exist_ok=True)
-    model_tag = lang if args.mode == "completion" else args.mode
+    model_tag = {"completion": lang, "dialogue": "dialogue", "combined": "combined",
+                 "pretrain": "pretrain", "sft": "sft"}.get(args.mode, args.mode)
     ckpt_path = f"checkpoint/minigpt_{model_tag}_checkpoint.pt"
     model_path = f"checkpoint/minigpt_{model_tag}.pt"
     lang_prompts = {"en": "O Romeo", "zh": "话说唐僧", "both": "Hello 你好"}
@@ -563,15 +566,31 @@ def main():
         if config is None:
             print("  ⚠ checkpoint 中无配置，从权重反推")
 
-    # ── 模式: completion / dialogue / combined ──
-    is_dialogue = args.mode in ("dialogue", "combined")
+    # ── 模式 ──
+    is_dialogue = args.mode in ("dialogue", "combined", "sft")
+    is_bpe = args.mode in ("dialogue", "combined", "pretrain", "sft")
 
     # 数据
     if data_files:
         text = "\n".join(open(f, encoding="utf-8").read() for f in data_files)
+    elif args.mode == "pretrain":
+        # 预训练：只用文本数据（txt + text 格式 jsonl）
+        paths = glob.glob("data/*.jsonl") + glob.glob("data/*.txt")
+        paths = [p for p in paths if "/dialogue_" not in p and "/pretrain_" not in p]
+        data_files = paths
+        jsonl_files = [p for p in paths if p.endswith(".jsonl")]
+        txt_files = [p for p in paths if p.endswith(".txt")]
+        texts = []
+        if jsonl_files:
+            from prepare_data import convert_jsonl
+            convert_jsonl(jsonl_files, "data/pretrain_text.txt")
+            texts.append(open("data/pretrain_text.txt").read())
+        for p in txt_files:
+            texts.append(open(p).read())
+        text = "\n".join(texts)
     elif is_dialogue:
+        # 对话/SFT：用对话格式 jsonl
         dia_paths = args.dialogue_data or ["data/dialogue_zh.txt"]
-        # 展开目录：扫描 .jsonl 和 .txt
         expanded = []
         for p in dia_paths:
             if os.path.isdir(p):
@@ -584,8 +603,7 @@ def main():
         if not all_exist and dia_paths == ["data/dialogue_zh.txt"]:
             from prepare_data import generate_simple_zh
             generate_simple_zh(dia_paths[0], repeat=50)
-        data_files = dia_paths  # 记录实际数据文件，供 checkpoint 保存
-        # 分别处理 JSONL（对话）和 TXT（续写），合并训练
+        data_files = dia_paths
         jsonl_files = [p for p in dia_paths if p.endswith(".jsonl")]
         txt_files = [p for p in dia_paths if p.endswith(".txt")]
         texts = []
@@ -593,9 +611,8 @@ def main():
             from prepare_data import convert_jsonl
             convert_jsonl(jsonl_files, "data/dialogue_train.jsonl.txt")
             texts.append(open("data/dialogue_train.jsonl.txt").read())
-        if txt_files:
-            for p in txt_files:
-                texts.append(open(p).read())
+        for p in txt_files:
+            texts.append(open(p).read())
         text = "\n".join(texts) if texts else ""
     else:
         text = get_data(lang)
@@ -605,8 +622,8 @@ def main():
                 keep = [f for f in get_data_paths(lang) if "hlm" not in f]
                 text = "\n".join(open(f, encoding="utf-8").read() for f in keep)
 
-    # Tokenizer（对话模式用 BPE）
-    if is_dialogue:
+    # Tokenizer（BPE 模式统一用 BPE）
+    if is_bpe:
         from tokenizer import load_tokenizer, train_tokenizer
         try:
             tokenizer = load_tokenizer("checkpoint/tokenizer.json")
@@ -625,6 +642,16 @@ def main():
         config = get_config(vocab_size=vs, preset=args.preset, **overrides)
 
     model = MiniGPT(config).to(args.device)
+
+    # SFT 从 pretrain 加载权重
+    if args.resume_from:
+        try:
+            ckpt = torch.load(args.resume_from, map_location=args.device, weights_only=False)
+            sd = ckpt.get("model_state_dict", ckpt)
+            model.load_state_dict(sd)
+            print(f"  已加载初始权重: {args.resume_from}")
+        except Exception as e:
+            print(f"  ⚠ 加载初始权重失败 ({e})，使用随机初始化")
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"\n{'='*54}")

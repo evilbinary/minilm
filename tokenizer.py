@@ -132,6 +132,8 @@ if __name__ == "__main__":
     ])
     parser.add_argument("--vocab-size", type=int, default=16000)
     parser.add_argument("--save", default="checkpoint/tokenizer.json")
+    parser.add_argument("--max-lines", type=int, default=50000,
+                        help="每个 JSONL 最多提取的行数（防内存爆）")
     args = parser.parse_args()
 
     # JSONL 文件 → 临时纯文本
@@ -139,8 +141,11 @@ if __name__ == "__main__":
     for f in args.files:
         if f.endswith(".jsonl"):
             tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+            count = 0
             with open(f, encoding="utf-8") as jf:
                 for line in jf:
+                    if count >= args.max_lines:
+                        break
                     line = line.strip()
                     if not line:
                         continue
@@ -149,6 +154,7 @@ if __name__ == "__main__":
                         conv = data.get("conversations", data.get("messages", []))
                         for msg in conv:
                             tmp.write(msg["content"] + "\n")
+                        count += 1
                     except json.JSONDecodeError:
                         continue
             tmp.close()
