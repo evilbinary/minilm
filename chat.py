@@ -73,10 +73,20 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=40)
     parser.add_argument("--max-new-tokens", type=int, default=200)
-    parser.add_argument("--device", default=("cuda" if torch.cuda.is_available() else "cpu"))
+    parser.add_argument("--device", default=None,
+                        help="cpu / cuda (默认自动检测，显存不足自动切 cpu)")
     args = parser.parse_args()
 
+    # 自动选择设备（GPU 显存不足时降级到 CPU）
     device = args.device
+    if device is None:
+        if torch.cuda.is_available():
+            free_mem = torch.cuda.mem_get_info()[0] / 1024**3
+            device = "cuda" if free_mem > 2 else "cpu"
+            if device == "cpu":
+                print(f"  ⚠ GPU 显存不足 ({free_mem:.1f}G 空闲)，自动切换到 CPU")
+        else:
+            device = "cpu"
     mode = args.mode
 
     mode_name = {"completion": "续写", "dialogue": "对话", "combined": "混合"}
@@ -125,8 +135,8 @@ def main():
                 print(f"  命令: /temp N, /topk N, /quit")
                 continue
 
-        # 对话模式：自动包装 <|user|> 标签
-        if mode == "dialogue":
+        # 对话/混合模式：自动包装 <|user|> 标签
+        if mode in ("dialogue", "combined"):
             input_text = f"{user_tag}{prompt}{end_tag}\n<|assistant|>"
         else:
             input_text = prompt
@@ -145,10 +155,8 @@ def main():
         generated = tokenizer.decode(out_ids[0].tolist())
 
         # 提取新生成的内容
-        if mode == "dialogue":
-            # 去掉输入部分，只保留 assistant 回复
+        if mode in ("dialogue", "combined"):
             reply = generated[len(input_text):]
-            # 去掉尾部的 <|end|> 等特殊 token
             for tag in [end_tag, "<|user|>", "<|assistant|>"]:
                 reply = reply.split(tag)[0]
         else:

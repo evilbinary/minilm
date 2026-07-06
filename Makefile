@@ -4,6 +4,7 @@
 TRAIN_ARGS ?= --preset 40M --max-iters 1000
 RESUME_ARGS ?= --preset 40M --max-iters 20000
 CHAT_ARGS ?= --temperature 0.8
+DEVICE ?= auto
 MODEL_LANG ?= both
 
 # ── 对话模型参数 ──
@@ -57,7 +58,7 @@ generate:
 	python minigpt.py --generate --lang $(MODEL_LANG) $(TRAIN_ARGS)
 
 chat:
-	python chat.py --lang $(MODEL_LANG) $(CHAT_ARGS)
+	python chat.py --lang $(MODEL_LANG) $(CHAT_ARGS) $(if $(filter auto,$(DEVICE)),,--device $(DEVICE))
 
 all: data train generate
 
