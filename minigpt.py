@@ -518,8 +518,8 @@ def main():
     parser.add_argument("--lang", choices=["en", "zh", "both"], default="en", help="语言: en=英文, zh=中文, both=中英混合")
     parser.add_argument("--mode", choices=["completion", "dialogue"], default="completion",
                         help="训练模式: completion=续写, dialogue=对话")
-    parser.add_argument("--dialogue-data", type=str, default=None,
-                        help="对话数据 JSONL 文件路径")
+    parser.add_argument("--dialogue-data", type=str, nargs="+", default=None,
+                        help="对话数据文件（多个 JSONL 用空格隔开）")
     parser.add_argument("--preset", type=str, default=None, help="模型规格: 4.5M/16M/40M/100M/200M")
     parser.add_argument("--d-model", type=int, default=None, help="模型维度（覆盖 preset）")
     parser.add_argument("--n-layers", type=int, default=None, help="Transformer 层数")
@@ -561,15 +561,19 @@ def main():
     if data_files:
         text = "\n".join(open(f, encoding="utf-8").read() for f in data_files)
     elif is_dialogue:
-        dia_path = args.dialogue_data or "data/dialogue_zh.txt"
-        if not os.path.exists(dia_path):
+        dia_paths = args.dialogue_data or ["data/dialogue_zh.txt"]
+        # 检查数据是否存在
+        all_exist = all(os.path.exists(p) for p in dia_paths)
+        if not all_exist and dia_paths == ["data/dialogue_zh.txt"]:
             from prepare_data import generate_simple_zh
-            generate_simple_zh(dia_path, repeat=50)
-        if dia_path.endswith(".jsonl"):
+            generate_simple_zh(dia_paths[0], repeat=50)
+        # 如果有 JSONL 文件，统一转换
+        jsonl_files = [p for p in dia_paths if p.endswith(".jsonl")]
+        if jsonl_files:
             from prepare_data import convert_jsonl
-            convert_jsonl(dia_path, "data/dialogue_train.txt")
-            dia_path = "data/dialogue_train.txt"
-        text = open(dia_path, encoding="utf-8").read()
+            convert_jsonl(jsonl_files, "data/dialogue_train.txt")
+            dia_paths = ["data/dialogue_train.txt"]
+        text = "\n".join(open(p, encoding="utf-8").read() for p in dia_paths)
     else:
         text = get_data(lang)
         if config:

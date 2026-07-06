@@ -104,23 +104,25 @@ def generate_simple_zh(output: str = "data/dialogue_zh.txt", repeat: int = 50):
     return output
 
 
-def convert_jsonl(jsonl_path: str, output: str = None):
-    """将 JSONL 对话数据转换为训练文本格式"""
+def convert_jsonl(jsonl_paths, output: str = None):
+    """将一个或多个 JSONL 文件转换为训练文本格式"""
     import json
+    if isinstance(jsonl_paths, str):
+        jsonl_paths = [jsonl_paths]
     dialogues = []
-    with open(jsonl_path, "r", encoding="utf-8") as f:
-        for line in f:
-            line = line.strip()
-            if not line:
-                continue
-            try:
-                data = json.loads(line)
-                conv = data.get("conversations", data.get("messages", []))
-                if conv:
-                    dialogues.append(format_dialogue(conv))
-            except json.JSONDecodeError:
-                continue
-
+    for path in jsonl_paths:
+        with open(path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    conv = data.get("conversations", data.get("messages", []))
+                    if conv:
+                        dialogues.append(format_dialogue(conv))
+                except json.JSONDecodeError:
+                    continue
     text = "\n".join(dialogues)
     if output:
         with open(output, "w", encoding="utf-8") as f:
@@ -157,7 +159,7 @@ def main():
         with open(args.output) as f:
             sample = f.read()[:200]
         ids = tok.encode(sample)
-        decoded = tok.decode(ids)
+        _ = tok.decode(ids)  # verify
         print(f"Tokenizer 验证: {len(sample)} 字符 → {len(ids)} tokens")
     except FileNotFoundError:
         print("Tokenizer 未训练，请先运行 python tokenizer.py")

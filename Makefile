@@ -1,4 +1,4 @@
-.PHONY: data train resume generate chat tokenizer dialogue-data dialogue dialogue-resume all clean help
+.PHONY: data train resume generate chat tokenizer dialogue dialogue-resume chat-dialogue all clean help
 
 # ── 续写模型参数 ──
 TRAIN_ARGS ?= --preset 40M --max-iters 1000
@@ -7,6 +7,7 @@ CHAT_ARGS ?= --temperature 0.8
 MODEL_LANG ?= both
 
 # ── 对话模型参数 ──
+DIA_DATA ?= data/dialogue_zh.txt
 DIA_ARGS ?= --preset 100M --max-iters 5000 --batch-size 4
 DIA_RESUME_ARGS ?= --preset 100M --max-iters 10000 --batch-size 4
 
@@ -22,18 +23,18 @@ help:
 	@echo ""
 	@echo "── 对话模型 ──"
 	@echo "  make tokenizer        训练 BPE tokenizer"
-	@echo "  make dialogue-data    生成对话数据"
 	@echo "  make dialogue         训练对话模型"
 	@echo "  make dialogue-resume  续训对话模型"
 	@echo "  make chat-dialogue    对话式聊天"
 	@echo ""
 	@echo "── 通用 ──"
-	@echo "  make all              续写: 数据→训练→生成"
+	@echo "  make all              续写: 数据->训练->生成"
 	@echo "  make clean            删除训练产物"
 	@echo ""
 	@echo "示例:"
-	@echo "  make train        TRAIN_ARGS=\"--preset 16M --max-iters 5000\""
-	@echo "  make dialogue     DIA_ARGS=\"--preset 200M --max-iters 10000\""
+	@echo "  make dialogue DIA_DATA=data/yuki_ruozhiba_1.5k.jsonl"
+	@echo "  make dialogue DIA_DATA='data/a.jsonl data/b.jsonl'"
+	@echo "  make dialogue DIA_ARGS='--preset 200M --max-iters 10000'"
 
 # ── 续写 ──
 
@@ -59,11 +60,8 @@ all: data train generate
 tokenizer:
 	python tokenizer.py --files data/tinyshakespeare.txt data/xyj.txt --save checkpoint/tokenizer.json
 
-dialogue-data:
-	python prepare_data.py --dataset simple_zh --output data/dialogue_zh.txt
-
-dialogue: tokenizer dialogue-data
-	python minigpt.py --train --mode dialogue $(DIA_ARGS)
+dialogue: tokenizer
+	python minigpt.py --train --mode dialogue --dialogue-data $(DIA_DATA) $(DIA_ARGS)
 
 dialogue-resume:
 	python minigpt.py --train --mode dialogue --resume $(DIA_RESUME_ARGS)
