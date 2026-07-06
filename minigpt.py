@@ -140,10 +140,12 @@ class MiniGPT(nn.Module):
             if isinstance(module, nn.Linear) and module.bias is not None:
                 torch.nn.init.zeros_(module.bias)
 
-    def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None):
+    def forward(self, idx: torch.Tensor, targets: Optional[torch.Tensor] = None,
+                loss_mask: Optional[torch.Tensor] = None):
         """
         idx: (B, S)          — 输入 token ids
         targets: (B, S)      — 目标 token ids（训练时）
+        loss_mask: (B, S)    — 1=计算loss, 0=忽略（对话时只算 assistant 部分）
         返回: {logits, loss}
         """
         _, S = idx.shape
@@ -162,7 +164,12 @@ class MiniGPT(nn.Module):
 
         loss = None
         if targets is not None:
-            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1))
+            loss = F.cross_entropy(logits.view(-1, logits.size(-1)), targets.view(-1),
+                                   reduction='none')  # 逐位置 loss
+            if loss_mask is not None:
+                loss = (loss * loss_mask.view(-1)).sum() / loss_mask.view(-1).sum().clamp(min=1)
+            else:
+                loss = loss.mean()
 
         return {"logits": logits, "loss": loss}
 
@@ -210,8 +217,8 @@ class MiniGPT(nn.Module):
         total_loss = 0.0
         total_tokens = 0
         for _ in range(max_batches):
-            x, y = next(data_loader)
-            x, y = x.to(self.lm_head.weight.device), y.to(self.lm_head.weight.device)
+            batch = next(data_loader)
+            x, y = batch[0].to(self.lm_head.weight.device), batch[1].to(self.lm_head.weight.device)
             out = self(x, targets=y)
             n_tokens = y.numel()
             total_loss += out["loss"].item() * n_tokens
@@ -327,9 +334,9 @@ def download_data(lang: str = "en"):
             print(f"  已保存 {path}")
 
 
-def make_dataloaders(text: str, tokenizer: CharTokenizer,
+def make_dataloaders(text: str, tokenizer,
                      config: GPTConfig, batch_size: int = 32):
-    """切分训练/验证集（按 segment 打散，保证中英文分布一致）"""
+    """创建训练/验证 DataLoader"""
     data = torch.tensor(tokenizer.encode(text), dtype=torch.long)
     # 切分成不重叠的 segment，打散后按 9:1 切分
     seg_len = config.max_seq_len + 1  # 多 1 留给 target
@@ -349,6 +356,59 @@ def make_dataloaders(text: str, tokenizer: CharTokenizer,
         def __init__(self, src): self.src = src
         def __iter__(self): return self
         def __next__(self): return get_batch(self.src)
+
+    return DataLoader(train_seg), DataLoader(val_seg)
+
+
+def make_dialogue_dataloaders(text: str, tokenizer,
+                               config: GPTConfig, batch_size: int = 32,
+                               assistant_id: int = 4, end_id: int = 2):
+    """
+    对话格式 DataLoader — 生成 (input, target, loss_mask)。
+
+    loss_mask: 只在 assistant 回复部分计算 loss，忽略 user 输入。
+    """
+    data = torch.tensor(tokenizer.encode(text), dtype=torch.long)
+    seg_len = config.max_seq_len + 1
+    n_seg = max(1, len(data) // seg_len)
+    # 取整并 reshape
+    n_tokens = n_seg * seg_len
+    data = data[:n_tokens].view(n_seg, seg_len)
+    indices = torch.randperm(n_seg)
+    # 小数据集保证至少 1 条训练、1 条验证
+    n_train = max(1, int(n_seg * 0.9)) if n_seg > 1 else 1
+    n_train = min(n_train, n_seg - 1)   # 至少留 1 条给验证
+    train_seg, val_seg = data[indices[:n_train]], data[indices[n_train:]]
+
+    def make_mask(seg: torch.Tensor) -> torch.Tensor:
+        """构建 loss_mask: 1=assistant 回答部分, 0=user 输入"""
+        mask = torch.zeros(seg_len, dtype=torch.float)
+        in_assistant = False
+        for i in range(seg_len):
+            tok = seg[i].item()
+            if tok == assistant_id:
+                in_assistant = True
+                mask[i] = 0.0  # <|assistant|> 本身不算
+            elif tok == end_id:
+                in_assistant = False
+                mask[i] = 0.0  # <|end|> 本身不算
+            elif in_assistant:
+                mask[i] = 1.0
+        return mask
+
+    def get_batch(src):
+        ix = torch.randint(len(src), (batch_size,))
+        x = torch.stack([src[i, :-1] for i in ix])
+        y = torch.stack([src[i, 1:] for i in ix])
+        m = torch.stack([make_mask(src[i])[:-1] for i in ix])
+        return x, y, m
+
+    class DataLoader:
+        def __init__(self, src): self.src = src
+        def __iter__(self): return self
+        def __next__(self):
+            x, y, m = get_batch(self.src)
+            return x, y, m
 
     return DataLoader(train_seg), DataLoader(val_seg)
 
@@ -398,10 +458,11 @@ def train(model: MiniGPT, train_loader, val_loader,
 
     start = time.time()
     for step in range(start_step, max_iters):
-        x, y = next(train_loader)
-        x, y = x.to(device), y.to(device)
+        batch = next(train_loader)
+        x, y = batch[0].to(device), batch[1].to(device)
+        m = batch[2].to(device) if len(batch) > 2 else None
 
-        loss = model(x, targets=y)["loss"]
+        loss = model(x, targets=y, loss_mask=m)["loss"]
 
         optimizer.zero_grad()
         loss.backward()
@@ -455,7 +516,11 @@ def main():
     parser.add_argument("--top-k", type=int, default=40)
     parser.add_argument("--resume", action="store_true", help="从 checkpoint 继续训练")
     parser.add_argument("--lang", choices=["en", "zh", "both"], default="en", help="语言: en=英文, zh=中文, both=中英混合")
-    parser.add_argument("--preset", type=str, default=None, help="模型规格: 4.5M/8.8M/16M/25M/40M")
+    parser.add_argument("--mode", choices=["completion", "dialogue"], default="completion",
+                        help="训练模式: completion=续写, dialogue=对话")
+    parser.add_argument("--dialogue-data", type=str, default=None,
+                        help="对话数据 JSONL 文件路径")
+    parser.add_argument("--preset", type=str, default=None, help="模型规格: 4.5M/16M/40M/100M/200M")
     parser.add_argument("--d-model", type=int, default=None, help="模型维度（覆盖 preset）")
     parser.add_argument("--n-layers", type=int, default=None, help="Transformer 层数")
     parser.add_argument("--n-heads", type=int, default=None, help="注意力头数")
@@ -466,8 +531,8 @@ def main():
     # 语言相关配置
     lang = args.lang
     os.makedirs("checkpoint", exist_ok=True)
-    ckpt_path = f"checkpoint/minigpt_{lang}_checkpoint.pt"
-    model_path = f"checkpoint/minigpt_{lang}.pt"
+    ckpt_path = f"checkpoint/minigpt_{'dialogue' if args.mode == 'dialogue' else lang}_checkpoint.pt"
+    model_path = f"checkpoint/minigpt_{'dialogue' if args.mode == 'dialogue' else lang}.pt"
     lang_prompts = {"en": "O Romeo", "zh": "话说唐僧", "both": "Hello 你好"}
     default_prompt = lang_prompts.get(lang, "O Romeo")
 
@@ -489,19 +554,39 @@ def main():
         if config is None:
             print("  ⚠ checkpoint 中无配置，从权重反推")
 
-    # 数据（续训用 checkpoint 记录的数据文件，保证词表一致）
+    # ── 模式: completion(续写) vs dialogue(对话) ──
+    is_dialogue = args.mode == "dialogue"
+
+    # 数据
     if data_files:
-        # 新 checkpoint：使用保存的数据文件列表
         text = "\n".join(open(f, encoding="utf-8").read() for f in data_files)
+    elif is_dialogue:
+        dia_path = args.dialogue_data or "data/dialogue_zh.txt"
+        if not os.path.exists(dia_path):
+            from prepare_data import generate_simple_zh
+            generate_simple_zh(dia_path, repeat=50)
+        if dia_path.endswith(".jsonl"):
+            from prepare_data import convert_jsonl
+            convert_jsonl(dia_path, "data/dialogue_train.txt")
+            dia_path = "data/dialogue_train.txt"
+        text = open(dia_path, encoding="utf-8").read()
     else:
-        # 旧 checkpoint：使用当前 DATA_FILES，若词表超了就排除 hlM
         text = get_data(lang)
-        tok = CharTokenizer(text)
-        if config and tok.vocab_size > config.vocab_size:
-            exclude = [f for f in DATA_FILES.get("zh", []) if "hlm" in f]
-            keep = [f for f in get_data_paths(lang) if f not in exclude]
-            text = "\n".join(open(f, encoding="utf-8").read() for f in keep)
-    tokenizer = CharTokenizer(text)
+        if config:
+            tok_c = CharTokenizer(text)
+            if tok_c.vocab_size > config.vocab_size:
+                keep = [f for f in get_data_paths(lang) if "hlm" not in f]
+                text = "\n".join(open(f, encoding="utf-8").read() for f in keep)
+
+    # Tokenizer（对话模式用 BPE）
+    if is_dialogue:
+        from tokenizer import load_tokenizer, train_tokenizer
+        try:
+            tokenizer = load_tokenizer("checkpoint/tokenizer.json")
+        except FileNotFoundError:
+            tokenizer = train_tokenizer(get_data_paths(lang), save_path="checkpoint/tokenizer.json")
+    else:
+        tokenizer = CharTokenizer(text)
 
     if config is None:
         overrides = {}
@@ -509,13 +594,14 @@ def main():
             v = getattr(args, k.replace("-", "_"))
             if v is not None:
                 overrides[k] = v
-        config = get_config(vocab_size=tokenizer.vocab_size,
-                           preset=args.preset, **overrides)
+        vs = tokenizer.vocab_size
+        config = get_config(vocab_size=vs, preset=args.preset, **overrides)
 
     model = MiniGPT(config).to(args.device)
 
     n_params = sum(p.numel() for p in model.parameters())
     print(f"\n{'='*54}")
+    print(f"  模式: {'对话' if is_dialogue else '续写'}")
     print(f"  模型: {config.d_model}x{config.n_layers}  |  {n_params/1e6:.1f}M 参数")
     print(f"  结构: d_model={config.d_model}  n_layers={config.n_layers}")
     print(f"         n_heads={config.n_heads}  d_ff={config.d_ff}  dropout={config.dropout}")
@@ -527,13 +613,18 @@ def main():
         lr = args.lr or tcfg.lr
         batch_size = args.batch_size or tcfg.batch_size
 
-        print(f"数据: {len(text)} 字符, 词表: {tokenizer.vocab_size}")
-        train_loader, val_loader = make_dataloaders(text, tokenizer, config, batch_size)
+        print(f"数据: {len(text)} 字符, 词表: {config.vocab_size}")
+        if is_dialogue:
+            train_loader, val_loader = make_dialogue_dataloaders(
+                text, tokenizer, config, batch_size)
+        else:
+            train_loader, val_loader = make_dataloaders(text, tokenizer, config, batch_size)
         train(model, train_loader, val_loader, max_iters, lr,
               eval_interval=args.eval_interval, log_interval=args.log_interval,
               resume_from=ckpt_path if args.resume else None,
               ckpt_path=ckpt_path, data_files=data_files,
-              vocab=tokenizer.stoi, device=args.device)
+              vocab=tokenizer.stoi if hasattr(tokenizer, 'stoi') else None,
+              device=args.device)
         torch.save(model.state_dict(), model_path)
         print(f"最终模型已保存到 {model_path}")
 

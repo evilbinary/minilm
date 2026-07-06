@@ -1,12 +1,14 @@
 """
 Chat — 交互式文本生成。
 
-从 checkpoint 自动读取模型配置，无需硬编码架构参数。
+支持续写和对话两种模式。
 
-Usage:
-    python chat.py                     # 英文
-    python chat.py --lang zh           # 中文
-    python chat.py --lang both         # 中英混合
+续写模式:
+    python chat.py                          # 英文续写
+    python chat.py --lang zh                # 中文续写
+
+对话模式:
+    python chat.py --mode dialogue          # 对话
 """
 
 from minigpt import MiniGPT, CharTokenizer, get_data
@@ -16,87 +18,78 @@ import os
 
 
 def _infer_config(state_dict: dict) -> GPTConfig:
-    """从 state_dict 推断模型架构（兼容旧版 checkpoint）"""
-    # 通过 lm_head 输入维度反推 d_model
-    lm_w = state_dict["lm_head.weight"]            # (vocab, d_model)
+    """从 state_dict 推断模型架构"""
+    lm_w = state_dict["lm_head.weight"]
     vocab, d_model = lm_w.shape
-
-    # 通过 qkv 权重反推 n_heads
-    qkv_w = state_dict["blocks.0.attn.qkv.weight"]  # (3*d_model, d_model)
-    assert qkv_w.shape[1] == d_model
-    head_dim = qkv_w.shape[0] // 3 // 8              # 假设 8 头，算 head_dim
-    # 找最接近的整数头数
-    for nh in [4, 6, 8, 12, 16]:
-        if (3 * d_model) % (3 * nh) == 0:
-            break
-
-    # 通过 FFN 权重反推 d_ff
-    ffn_w = state_dict["blocks.0.ffn.w1.weight"]     # (d_ff, d_model)
+    ffn_w = state_dict["blocks.0.ffn.w1.weight"]
     d_ff = ffn_w.shape[0]
-
-    # 层数
     n_layers = sum(1 for k in state_dict if k.startswith("blocks.") and k.endswith(".ln1.weight"))
-
-    return GPTConfig(
-        vocab_size=vocab,
-        d_model=d_model,
-        n_layers=n_layers,
-        n_heads=8 if d_model % 8 == 0 else 4,
-        d_ff=d_ff,
-    )
+    return GPTConfig(vocab_size=vocab, d_model=d_model, n_layers=n_layers,
+                     n_heads=8 if d_model % 8 == 0 else 4, d_ff=d_ff)
 
 
-def load_model(lang: str = "en", device: str = "cpu"):
-    """加载训练好的模型（配置从 checkpoint 读取）"""
-    text = get_data(lang)
-    tokenizer = CharTokenizer(text)
+def load_model(mode: str = "completion", lang: str = "en", device: str = "cpu"):
+    """加载模型"""
+    if mode == "dialogue":
+        # 对话模式：BPE tokenizer + dialogue checkpoint
+        from tokenizer import load_tokenizer
+        tokenizer = load_tokenizer("checkpoint/tokenizer.json")
+        ckpt_name = "minigpt_dialogue"
+    else:
+        # 续写模式：CharTokenizer + lang-specific checkpoint
+        text = get_data(lang)
+        tokenizer = CharTokenizer(text)
+        ckpt_name = f"minigpt_{lang}"
 
-    ckpt_path = f"checkpoint/minigpt_{lang}_checkpoint.pt"
-    model_path = f"checkpoint/minigpt_{lang}.pt"
-    vocab_size = tokenizer.vocab_size
+    ckpt_path = f"checkpoint/{ckpt_name}_checkpoint.pt"
+    model_path = f"checkpoint/{ckpt_name}.pt"
 
     for path in [model_path, ckpt_path]:
         if not os.path.exists(path):
             continue
         data = torch.load(path, map_location=device, weights_only=False)
         state_dict = data.get("model_state_dict", data)
-
         config = data.get("config", None)
         if config is None:
             config = _infer_config(state_dict)
             print(f"  ⚠ 从权重反推配置: d={config.d_model} l={config.n_layers} f={config.d_ff}")
-
         model = MiniGPT(config).to(device)
         model.load_state_dict(state_dict)
         print(f"  已加载: {path}")
         return model, tokenizer
 
-    model = MiniGPT(get_config(vocab_size=vocab_size)).to(device)
-    print("  ⚠ 未找到训练好的模型，使用随机参数")
+    # 未找到模型
+    vs = tokenizer.vocab_size if hasattr(tokenizer, 'vocab_size') else len(tokenizer.stoi)
+    model = MiniGPT(get_config(vocab_size=vs)).to(device)
+    print("  ⚠ 未找到模型，使用随机参数")
     return model, tokenizer
 
 
 def main():
     import argparse
-    parser = argparse.ArgumentParser(description="Mini GPT 交互式聊天")
+    parser = argparse.ArgumentParser(description="Mini GPT Chat")
+    parser.add_argument("--mode", choices=["completion", "dialogue"], default="completion",
+                        help="续写 / 对话")
     parser.add_argument("--lang", choices=["en", "zh", "both"], default="en",
-                        help="语言: en=英文, zh=中文, both=中英混合")
-    parser.add_argument("--temperature", type=float, default=0.8, help="采样温度")
-    parser.add_argument("--top-k", type=int, default=40, help="Top-K 采样")
-    parser.add_argument("--max-new-tokens", type=int, default=150, help="最大生成长度")
+                        help="语言（续写模式）")
+    parser.add_argument("--temperature", type=float, default=0.8)
+    parser.add_argument("--top-k", type=int, default=40)
+    parser.add_argument("--max-new-tokens", type=int, default=200)
     parser.add_argument("--device", default=("cuda" if torch.cuda.is_available() else "cpu"))
     args = parser.parse_args()
 
-    lang = args.lang
     device = args.device
-    lang_names = {"en": "English", "zh": "中文", "both": "中英双语"}
-    lang_name = lang_names.get(lang, "English")
+    mode = args.mode
 
-    print(f"加载 Mini GPT ({lang_name})...")
-    model, tokenizer = load_model(lang, device)
+    print(f"加载 Mini GPT ({'对话' if mode == 'dialogue' else '续写'})...")
+    model, tokenizer = load_model(mode, args.lang, device)
+
+    eos_id = tokenizer.eos_id
+    user_tag = "<|user|>"
+    end_tag = "<|end|>"
 
     print(f"\n{'='*60}")
-    print(f"  Mini GPT Chat ({lang_name} · 交互式生成)")
+    print(f"  Mini GPT ({'对话模式' if mode == 'dialogue' else '续写模式'})")
     print(f"  温度={args.temperature}  top-k={args.top_k}")
     print(f"  输入 /temp 0.6 调温度，/topk 20 调 top-k")
     print(f"  输入 /quit 或 Ctrl+C 退出")
@@ -132,7 +125,13 @@ def main():
                 print(f"  命令: /temp N, /topk N, /quit")
                 continue
 
-        prompt_ids = torch.tensor(tokenizer.encode(prompt), dtype=torch.long).unsqueeze(0).to(device)
+        # 对话模式：自动包装 <|user|> 标签
+        if mode == "dialogue":
+            input_text = f"{user_tag}{prompt}{end_tag}\n<|assistant|>"
+        else:
+            input_text = prompt
+
+        prompt_ids = torch.tensor(tokenizer.encode(input_text), dtype=torch.long).unsqueeze(0).to(device)
 
         with torch.no_grad():
             out_ids = model.generate(
@@ -140,12 +139,22 @@ def main():
                 max_new_tokens=args.max_new_tokens,
                 temperature=temp,
                 top_k=topk,
-                eos_id=tokenizer.eos_id,
+                eos_id=eos_id,
             )
 
         generated = tokenizer.decode(out_ids[0].tolist())
-        new_text = generated[len(prompt):]
-        print(f"GPT > {new_text}")
+
+        # 提取新生成的内容
+        if mode == "dialogue":
+            # 去掉输入部分，只保留 assistant 回复
+            reply = generated[len(input_text):]
+            # 去掉尾部的 <|end|> 等特殊 token
+            for tag in [end_tag, "<|user|>", "<|assistant|>"]:
+                reply = reply.split(tag)[0]
+        else:
+            reply = generated[len(input_text):]
+
+        print(f"GPT > {reply.strip()}")
         print()
 
 
