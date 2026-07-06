@@ -36,7 +36,7 @@ help:
 # ── Tokenizer ──
 
 tokenizer:
-	python tokenizer.py --files data/tinyshakespeare.txt data/xyj.txt data/hlm.txt data/agent_rl.jsonl data/yuki_ruozhiba_1.5k.jsonl --save checkpoint/tokenizer.json
+	python tokenizer.py --files data/tinyshakespeare.txt data/xyj.txt data/hlm.txt  data/yuki_ruozhiba_1.5k.jsonl --save checkpoint/tokenizer.json
 
 # ── 预训练 ──
 

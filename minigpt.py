@@ -19,6 +19,7 @@ import torch.nn.functional as F
 import math
 import time
 import os
+import numpy as np
 from typing import Optional
 import glob
 
@@ -339,49 +340,115 @@ def download_data(lang: str = "en"):
             print(f"  已保存 {path}")
 
 
-def _encode_chunked(text: str, tokenizer, chunk_size: int = 10*1024*1024):
-    """分块编码，避免大文本时 Python int 列表爆内存"""
-    chunks = []
-    for i in range(0, len(text), chunk_size):
-        chunks.append(torch.tensor(tokenizer.encode(text[i:i+chunk_size]), dtype=torch.long))
-    return torch.cat(chunks)
+CACHE_DIR = "cache"
+os.makedirs(CACHE_DIR, exist_ok=True)
+
+
+def _encode_chunked(text: str, tokenizer, chunk_size: int = 50*1024*1024,
+                     cache_key: str = None):
+    """分块编码（直接写二进制文件，省内存）"""
+    cache_path = f"{CACHE_DIR}/tokens_{cache_key}.bin" if cache_key else None
+
+    # 有缓存 → 直接读取
+    if cache_path and os.path.exists(cache_path):
+        arr = np.fromfile(cache_path, dtype=np.int32)
+        print(f"  加载缓存: {cache_path} ({len(arr)} tokens)")
+        return torch.from_numpy(arr).to(torch.long)
+
+    total = len(text)
+    total_tokens = 0
+    tmp_path = cache_path or f"{CACHE_DIR}/_tmp_tokens.bin"
+    os.makedirs(os.path.dirname(tmp_path) or ".", exist_ok=True)
+
+    with open(tmp_path, "wb") as f:
+        for i in range(0, total, chunk_size):
+            pct = i * 100 // total
+            print(f"  编码中... {pct}% ({i//1024//1024}MB/{total//1024//1024}MB)", end="\r")
+            ids = tokenizer.encode(text[i:i+chunk_size])
+            f.write(np.array(ids, dtype=np.int32).tobytes())
+            total_tokens += len(ids)
+
+    # 从文件加载
+    arr = np.fromfile(tmp_path, dtype=np.int32)
+    data = torch.from_numpy(arr).to(torch.long)
+    print(f"\n  编码完成! {total_tokens} tokens, {total_tokens*4/1024/1024:.0f}MB")
+
+    if not cache_key:
+        os.remove(tmp_path)
+    return data
 
 
 def make_dataloaders(text: str, tokenizer,
-                     config: GPTConfig, batch_size: int = 32):
-    """创建训练/验证 DataLoader（分块编码防 OOM）"""
-    data = _encode_chunked(text, tokenizer)
-    seg_len = config.max_seq_len + 1  # 多 1 留给 target
-    n_seg = len(data) // seg_len
-    data = data[:n_seg * seg_len].view(n_seg, seg_len)
-    indices = torch.randperm(n_seg)
-    n_train = max(1, int(n_seg * 0.9))
-    if n_train >= n_seg:
-        n_train = n_seg - 1
-    train_seg, val_seg = data[indices[:n_train]], data[indices[n_train:]]
+                     config: GPTConfig, batch_size: int = 32,
+                     cache_key: str = None):
+    """流式 DataLoader：不重复采样，遍历全数据后自动开始新 epoch"""
+    import random
+    seg_len = config.max_seq_len + 1
+    total_chars = len(text)
+    step = 2000  # 每 2000 字符采一个起点（~512 token 重叠滑动）
 
-    def get_batch(src):
-        ix = torch.randint(len(src), (batch_size,))
-        x = torch.stack([src[i, :-1] for i in ix])
-        y = torch.stack([src[i, 1:] for i in ix])
-        return x, y
+    # 预计算所有起始位置，打散后顺序取
+    positions = list(range(0, total_chars - 5000, step))
+    random.shuffle(positions)
+
+    def _decode(pos):
+        """从 pos 读取文本并编码为 token ids"""
+        chunk = text[pos:pos + 5000]
+        ids = tokenizer.encode(chunk)
+        if len(ids) >= seg_len:
+            return ids[:seg_len]
+        return None
+
+    # 训练/验证 9:1 切分位置列表
+    n_train = max(1, int(len(positions) * 0.9))
+    if n_train >= len(positions):
+        n_train = len(positions) - 1
+    pos_train = positions[:n_train]
+    pos_val = positions[n_train:]
+    # 每个线程独立指针
+    ptr_train, ptr_val = [0], [0]
+    shuffle_interval = max(n_train, 1)
+
+    def _iter_once(pptr, ppos, is_train):
+        """一轮迭代：取一个 batch 的位置，前进指针，到底了重新打散"""
+        xs, ys = [], []
+        for _ in range(batch_size):
+            if pptr[0] >= len(ppos):
+                random.shuffle(ppos)
+                pptr[0] = 0
+            pos = ppos[pptr[0]]
+            pptr[0] += 1
+            ids = _decode(pos)
+            if ids is None and is_train:
+                continue  # 跳过无效位置，训练时可以容忍少几个
+            if ids is not None:
+                xs.append(torch.tensor(ids[:-1], dtype=torch.long))
+                ys.append(torch.tensor(ids[1:], dtype=torch.long))
+        if not xs:
+            return torch.zeros(1, seg_len-1, dtype=torch.long), torch.zeros(1, seg_len-1, dtype=torch.long)
+        return torch.stack(xs), torch.stack(ys)
 
     class DataLoader:
-        def __init__(self, src): self.src = src
+        def __init__(self, positions, ptr, is_train):
+            self.positions = positions
+            self.ptr = ptr
+            self.is_train = is_train
         def __iter__(self): return self
-        def __next__(self): return get_batch(self.src)
+        def __next__(self):
+            return _iter_once(self.ptr, self.positions, self.is_train)
 
-    return DataLoader(train_seg), DataLoader(val_seg)
+    return DataLoader(pos_train, ptr_train, True), DataLoader(pos_val, ptr_val, False)
 
 
 def make_dialogue_dataloaders(text: str, tokenizer,
                                config: GPTConfig, batch_size: int = 32,
-                               assistant_id: int = 4, end_id: int = 2):
+                               assistant_id: int = 4, end_id: int = 2,
+                               cache_key: str = None):
     """
     对话格式 DataLoader — 生成 (input, target, loss_mask)。
     分块编码防 OOM。
     """
-    data = _encode_chunked(text, tokenizer)
+    data = _encode_chunked(text, tokenizer, cache_key=cache_key)
     seg_len = config.max_seq_len + 1
     min_tokens = seg_len * 2  # 至少 2 个 segment（1 训练 + 1 验证）
     if len(data) < min_tokens:
@@ -574,9 +641,11 @@ def main():
     if data_files:
         text = "\n".join(open(f, encoding="utf-8").read() for f in data_files)
     elif args.mode == "pretrain":
-        # 预训练：只用文本数据（txt + text 格式 jsonl）
+        # 预训练：只用小说 + 纯文本 jsonl（排除超大对话文件）
+        exclude = {"sft_t2t_mini.jsonl", "agent_rl.jsonl", "agent_rl_math.jsonl",
+                   "yuki_ruozhiba_1.5k.jsonl"}
         paths = glob.glob("data/*.jsonl") + glob.glob("data/*.txt")
-        paths = [p for p in paths if "/dialogue_" not in p and "/pretrain_" not in p]
+        paths = [p for p in paths if os.path.basename(p) not in exclude]
         data_files = paths
         jsonl_files = [p for p in paths if p.endswith(".jsonl")]
         txt_files = [p for p in paths if p.endswith(".txt")]
@@ -623,6 +692,9 @@ def main():
                 text = "\n".join(open(f, encoding="utf-8").read() for f in keep)
 
     # Tokenizer（BPE 模式统一用 BPE）
+    # 编码缓存：如果数据没变直接加载
+    data_cache = f"data/tokens_{args.mode}.pt" if is_bpe else None
+
     if is_bpe:
         from tokenizer import load_tokenizer, train_tokenizer
         try:
@@ -668,11 +740,13 @@ def main():
         batch_size = args.batch_size or tcfg.batch_size
 
         print(f"数据: {len(text)} 字符, 词表: {config.vocab_size}")
+        cache_key = args.mode if is_bpe else None
         if is_dialogue:
             train_loader, val_loader = make_dialogue_dataloaders(
-                text, tokenizer, config, batch_size)
+                text, tokenizer, config, batch_size, cache_key=cache_key)
         else:
-            train_loader, val_loader = make_dataloaders(text, tokenizer, config, batch_size)
+            train_loader, val_loader = make_dataloaders(
+                text, tokenizer, config, batch_size, cache_key=cache_key)
         train(model, train_loader, val_loader, max_iters, lr,
               eval_interval=args.eval_interval, log_interval=args.log_interval,
               resume_from=ckpt_path if args.resume else None,

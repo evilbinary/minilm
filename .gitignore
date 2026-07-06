@@ -9,3 +9,4 @@ data/dialogue_train.jsonl.txt
 data/agent_rl_math.jsonl
 data/*
 checkpoint/tokenizer.json
+cache/
