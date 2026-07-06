@@ -351,7 +351,9 @@ def make_dataloaders(text: str, tokenizer,
     n_seg = len(data) // seg_len
     data = data[:n_seg * seg_len].view(n_seg, seg_len)
     indices = torch.randperm(n_seg)
-    n_train = int(n_seg * 0.9)
+    n_train = max(1, int(n_seg * 0.9))
+    if n_train >= n_seg:
+        n_train = n_seg - 1
     train_seg, val_seg = data[indices[:n_train]], data[indices[n_train:]]
 
     def get_batch(src):
@@ -377,14 +379,17 @@ def make_dialogue_dataloaders(text: str, tokenizer,
     """
     data = _encode_chunked(text, tokenizer)
     seg_len = config.max_seq_len + 1
-    n_seg = max(1, len(data) // seg_len)
-    # 取整并 reshape
+    min_tokens = seg_len * 2  # 至少 2 个 segment（1 训练 + 1 验证）
+    if len(data) < min_tokens:
+        data = torch.cat([data, data.new_zeros(min_tokens - len(data))])
+    n_seg = len(data) // seg_len
     n_tokens = n_seg * seg_len
     data = data[:n_tokens].view(n_seg, seg_len)
     indices = torch.randperm(n_seg)
-    # 小数据集保证至少 1 条训练、1 条验证
-    n_train = max(1, int(n_seg * 0.9)) if n_seg > 1 else 1
-    n_train = min(n_train, n_seg - 1)   # 至少留 1 条给验证
+    # 切分训练/验证（小数据集至少各 1 条）
+    n_train = max(1, int(n_seg * 0.9))
+    if n_train >= n_seg:
+        n_train = n_seg - 1  # 至少留 1 条验证
     train_seg, val_seg = data[indices[:n_train]], data[indices[n_train:]]
 
     def make_mask(seg: torch.Tensor) -> torch.Tensor:
@@ -588,6 +593,7 @@ def main():
         if not all_exist and dia_paths == ["data/dialogue_zh.txt"]:
             from prepare_data import generate_simple_zh
             generate_simple_zh(dia_paths[0], repeat=50)
+        data_files = dia_paths  # 记录实际数据文件，供 checkpoint 保存
         # 分别处理 JSONL（对话）和 TXT（续写），合并训练
         jsonl_files = [p for p in dia_paths if p.endswith(".jsonl")]
         txt_files = [p for p in dia_paths if p.endswith(".txt")]

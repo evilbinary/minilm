@@ -9,7 +9,7 @@ MODEL_LANG ?= both
 # ── 对话模型参数 ──
 DIA_DATA ?= data/dialogue_zh.txt
 DIA_ARGS ?= --preset 100M --max-iters 5000 --batch-size 4
-DIA_RESUME_ARGS ?= --preset 100M --max-iters 10000 --batch-size 4
+DIA_RESUME_ARGS ?= --preset 100M --max-iters 200000 --batch-size 4
 
 # ── 混合模型参数（续写+对话合并）─
 COMBO_ARGS ?= --preset 200M --max-iters 8000 --batch-size 4
@@ -83,7 +83,9 @@ combined: tokenizer
 	  $(COMBO_ARGS)
 
 combined-resume:
-	python minigpt.py --train --mode combined --resume $(COMBO_ARGS)
+	python minigpt.py --train --mode combined --resume \
+	  --dialogue-data data/*.jsonl data/*.txt \
+	  $(COMBO_ARGS)
 
 chat-combined:
 	python chat.py --mode combined $(CHAT_ARGS)
