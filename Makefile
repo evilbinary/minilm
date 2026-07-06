@@ -12,7 +12,7 @@ DIA_ARGS ?= --preset 100M --max-iters 5000 --batch-size 4
 DIA_RESUME_ARGS ?= --preset 100M --max-iters 200000 --batch-size 4
 
 # ── 混合模型参数（续写+对话合并）─
-COMBO_ARGS ?= --preset 200M --max-iters 8000 --batch-size 4
+COMBO_ARGS ?= --preset 200M --max-iters 200000 --batch-size 4
 
 help:
 	@echo "Mini GPT — Makefile"

@@ -282,13 +282,17 @@ def save_checkpoint(path: str, model: MiniGPT, optimizer, step: int, best_loss: 
 
 
 def load_checkpoint(path: str, model: MiniGPT, optimizer=None, device="cpu"):
-    """加载 checkpoint，返回 (step, best_loss)"""
-    ckpt = torch.load(path, map_location=device, weights_only=False)
-    model.load_state_dict(ckpt["model_state_dict"])
-    if optimizer is not None:
-        optimizer.load_state_dict(ckpt["optimizer_state_dict"])
-    print(f"  [Checkpoint] 已加载 {path} (step={ckpt['step']})")
-    return ckpt["step"], ckpt["best_loss"]
+    """加载 checkpoint，返回 (step, best_loss)。损坏时返回 (0, inf)"""
+    try:
+        ckpt = torch.load(path, map_location=device, weights_only=False)
+        model.load_state_dict(ckpt["model_state_dict"])
+        if optimizer is not None and "optimizer_state_dict" in ckpt:
+            optimizer.load_state_dict(ckpt["optimizer_state_dict"])
+        print(f"  [Checkpoint] 已加载 {path} (step={ckpt['step']})")
+        return ckpt["step"], ckpt["best_loss"]
+    except Exception as e:
+        print(f"  ⚠ checkpoint 损坏 ({e})，从头开始训练")
+        return 0, float("inf")
 
 
 def get_data_paths(lang: str = "en") -> list[str]:
@@ -447,26 +451,8 @@ def train(model: MiniGPT, train_loader, val_loader,
     best_loss = float("inf")
     if resume_from is not None:
         start_step, best_loss = load_checkpoint(resume_from, model, optimizer, device)
-        # 把优化器的 lr 重新设一下
-        for g in optimizer.param_groups:
-            g["lr"] = lr
 
-    # 三段式学习率: warmup → 恒定 → 余弦衰减
-    warmup_iters = max_iters // 20           # 5% warmup
-    hold_iters = max_iters // 4              # 25% 恒定峰值 LR
-    import math as _math
-
-    def get_lr(step: int) -> float:
-        if step < warmup_iters:
-            return lr * (step + 1) / warmup_iters
-        if step < warmup_iters + hold_iters:
-            return lr
-        # 余弦衰减到 0
-        decay_steps = max_iters - warmup_iters - hold_iters
-        progress = (step - warmup_iters - hold_iters) / max(1, decay_steps)
-        return lr * 0.1 + 0.9 * lr * (1 + _math.cos(_math.pi * progress)) / 2
-
-    print(f"设备: {device}")
+    print(f"设备: {device}  LR: {lr} (固定)")
     print(f"起始步: {start_step}, 目标步数: {max_iters}")
     print(f"{'='*65}")
     print(f"{'Iter':>6} | {'Train Loss':>10} | {'Val PPL':>8} | {'Time':>8} | {'LR':>10}")
@@ -485,9 +471,6 @@ def train(model: MiniGPT, train_loader, val_loader,
         torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)  # 梯度裁剪
         optimizer.step()
 
-        # 更新学习率
-        for g in optimizer.param_groups:
-            g["lr"] = get_lr(step)
 
         # 每 log_interval 步打印训练 loss
         if step % log_interval == 0 or step == max_iters - 1:
@@ -565,10 +548,18 @@ def main():
     # 续训时从 checkpoint 读取数据文件列表
     data_files = None
     config = None
-    if args.resume and os.path.exists(ckpt_path):
-        ckpt_data = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-        config = ckpt_data.get("config")
-        data_files = ckpt_data.get("data_files")
+    if args.resume:
+        try:
+            ckpt_data = torch.load(ckpt_path, map_location="cpu", weights_only=False)
+            config = ckpt_data.get("config")
+            data_files = ckpt_data.get("data_files")
+        except Exception as e:
+            print(f"  ⚠ checkpoint 损坏 ({e}), 尝试加载模型权重...")
+            try:
+                ckpt_data = torch.load(model_path, map_location="cpu", weights_only=False)
+                config = ckpt_data.get("config")
+            except:
+                config = None
         if config is None:
             print("  ⚠ checkpoint 中无配置，从权重反推")
 
