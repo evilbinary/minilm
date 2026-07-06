@@ -9,8 +9,8 @@ PRETRAIN_ARGS ?= --preset 100M --max-iters 50000 --batch-size 6
 PRETRAIN_RESUME_ARGS ?= --preset 100M --max-iters 100000 --batch-size 6
 
 # ── SFT 参数 ──
-SFT_DATA ?= data/sft_t2t_mini.jsonl data/agent_rl.jsonl data/agent_rl_math.jsonl
-SFT_ARGS ?= --preset 100M --max-iters 20000 --batch-size 16
+SFT_DATA ?= data/agent_rl.jsonl data/agent_rl_math.jsonl
+SFT_ARGS ?= --batch-size 4 --max-iters 50000 --lr 1e-4
 
 help:
 	@echo "Mini GPT — 两阶段训练"
@@ -56,10 +56,10 @@ sft: tokenizer
 	  --dialogue-data $(SFT_DATA) $(SFT_ARGS)
 
 sft-resume:
-	python minigpt.py --train --mode sft --resume $(SFT_RESUME_ARGS)
+	python minigpt.py --train --mode sft --resume $(SFT_ARGS)
 
 chat-sft:
-	python chat.py --mode combined $(CHAT_ARGS)
+	python chat.py --mode combined --checkpoint checkpoint/minigpt_sft.pt $(CHAT_ARGS)
 
 # ── 清理 ──
 

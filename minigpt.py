@@ -406,13 +406,6 @@ def make_dataloaders(text: str, tokenizer,
     val_chunks = chunks[n_train:]
     ptr_train, ptr_val = [0], [0]
 
-    def _decode_one(chunk: str):
-        """编码一段文本，取前 seg_len 个 token"""
-        ids = tokenizer.encode(chunk)
-        if len(ids) >= seg_len:
-            return ids[:seg_len]
-        return None
-
     def _iter_once(ptr, pool):
         xs, ys = [], []
         for _ in range(batch_size):
@@ -421,12 +414,12 @@ def make_dataloaders(text: str, tokenizer,
                 ptr[0] = 0
             chunk = pool[ptr[0]]
             ptr[0] += 1
-            ids = _decode_one(chunk)
-            if ids:
-                xs.append(torch.tensor(ids[:-1], dtype=torch.long))
-                ys.append(torch.tensor(ids[1:], dtype=torch.long))
-        if not xs:
-            return torch.zeros(1, seg_len-1, dtype=torch.long), torch.zeros(1, seg_len-1, dtype=torch.long)
+            ids = tokenizer.encode(chunk)
+            ids = ids[:seg_len]
+            if len(ids) < seg_len:
+                ids = ids + [0] * (seg_len - len(ids))  # pad
+            xs.append(torch.tensor(ids[:-1], dtype=torch.long))
+            ys.append(torch.tensor(ids[1:], dtype=torch.long))
         return torch.stack(xs), torch.stack(ys)
 
     class DataLoader:
@@ -443,59 +436,71 @@ def make_dialogue_dataloaders(text: str, tokenizer,
                                assistant_id: int = 4, end_id: int = 2,
                                cache_key: str = None):
     """
-    对话格式 DataLoader — 生成 (input, target, loss_mask)。
-    分块编码防 OOM。
+    流式对话 DataLoader — 按行采样，按需编码。
+    每行是一条完整对话，不预编码全部数据。
     """
-    data = _encode_chunked(text, tokenizer, cache_key=cache_key)
+    import random
     seg_len = config.max_seq_len + 1
-    min_tokens = seg_len * 2  # 至少 2 个 segment（1 训练 + 1 验证）
-    if len(data) < min_tokens:
-        data = torch.cat([data, data.new_zeros(min_tokens - len(data))])
-    n_seg = len(data) // seg_len
-    n_tokens = n_seg * seg_len
-    data = data[:n_tokens].view(n_seg, seg_len)
-    indices = torch.randperm(n_seg)
-    # 切分训练/验证（小数据集至少各 1 条）
-    n_train = max(1, int(n_seg * 0.9))
-    if n_train >= n_seg:
-        n_train = n_seg - 1  # 至少留 1 条验证
-    train_seg, val_seg = data[indices[:n_train]], data[indices[n_train:]]
 
-    def make_mask(seg: torch.Tensor) -> torch.Tensor:
-        """loss_mask: 1=assistant回答/纯文本, 0=user输入。纯文本全部参与 loss"""
-        mask = torch.zeros(seg_len, dtype=torch.float)
-        in_assistant = False
-        has_assistant = False
-        for i in range(seg_len):
-            tok = seg[i].item()
+    # 按行切分，每行是一条对话
+    lines = [l for l in text.splitlines() if l.strip()]
+    random.shuffle(lines)
+
+    n_train = max(1, int(len(lines) * 0.9))
+    if n_train >= len(lines):
+        n_train = len(lines) - 1
+    train_lines = lines[:n_train]
+    val_lines = lines[n_train:]
+    ptr_train, ptr_val = [0], [0]
+
+    def _make_mask(ids: list[int]) -> list[float]:
+        """构建 loss_mask: 1=assistant回答, 0=user。纯文本全 1"""
+        mask = [0.0] * len(ids)
+        in_asst = False
+        has_asst = False
+        for i, tok in enumerate(ids):
             if tok == assistant_id:
-                in_assistant = True
-                has_assistant = True
+                in_asst = True
+                has_asst = True
                 mask[i] = 0.0
             elif tok == end_id:
-                in_assistant = False
+                in_asst = False
                 mask[i] = 0.0
-            elif in_assistant:
+            elif in_asst:
                 mask[i] = 1.0
-        if not has_assistant:
-            mask[:] = 1.0  # 纯文本：全部参与 loss 计算
+        if not has_asst:
+            mask = [1.0] * len(ids)
         return mask
 
-    def get_batch(src):
-        ix = torch.randint(len(src), (batch_size,))
-        x = torch.stack([src[i, :-1] for i in ix])
-        y = torch.stack([src[i, 1:] for i in ix])
-        m = torch.stack([make_mask(src[i])[:-1] for i in ix])
-        return x, y, m
+    def _pad(ids: list, target_len: int) -> list:
+        """padding 到 target_len（pad_id=0）"""
+        if len(ids) >= target_len:
+            return ids[:target_len]
+        return ids + [0] * (target_len - len(ids))
+
+    def _sample(ptr, pool):
+        xs, ys, ms = [], [], []
+        for _ in range(batch_size):
+            if ptr[0] >= len(pool):
+                random.shuffle(pool)
+                ptr[0] = 0
+            line = pool[ptr[0]]
+            ptr[0] += 1
+            ids = tokenizer.encode(line)
+            ids = _pad(ids, seg_len)
+            mask = _make_mask(ids)[:-1]
+            xs.append(torch.tensor(ids[:-1], dtype=torch.long))
+            ys.append(torch.tensor(ids[1:], dtype=torch.long))
+            ms.append(torch.tensor(mask, dtype=torch.float))
+        return torch.stack(xs), torch.stack(ys), torch.stack(ms)
 
     class DataLoader:
-        def __init__(self, src): self.src = src
+        def __init__(self, pool, ptr, is_train):
+            self.pool, self.ptr, self.is_train = pool, ptr, is_train
         def __iter__(self): return self
-        def __next__(self):
-            x, y, m = get_batch(self.src)
-            return x, y, m
+        def __next__(self): return _sample(self.ptr, self.pool)
 
-    return DataLoader(train_seg), DataLoader(val_seg)
+    return DataLoader(train_lines, ptr_train, True), DataLoader(val_lines, ptr_val, False)
 
 
 # ═══════════════════════════════════════════════════════
