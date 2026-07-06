@@ -660,59 +660,59 @@ def main():
     is_bpe = args.mode in ("dialogue", "combined", "pretrain", "sft")
 
     # 数据
-    if data_files:
+    text = ""
+    if data_files and all(os.path.exists(f) for f in data_files):
         text = "\n".join(open(f, encoding="utf-8").read() for f in data_files)
-    elif args.mode == "pretrain":
-        # 预训练：只用小说 + 纯文本 jsonl（排除超大对话文件）
-        exclude = {"sft_t2t_mini.jsonl", "agent_rl.jsonl", "agent_rl_math.jsonl",
-                   "yuki_ruozhiba_1.5k.jsonl", "dialogue_train.jsonl.txt",
-                   "dialogue_train.txt", "dialogue_zh.txt", "pretrain_text.txt"}
-        paths = glob.glob("data/*.jsonl") + glob.glob("data/*.txt")
-        paths = [p for p in paths if os.path.basename(p) not in exclude]
-        data_files = paths
-        jsonl_files = [p for p in paths if p.endswith(".jsonl")]
-        txt_files = [p for p in paths if p.endswith(".txt")]
-        texts = []
-        if jsonl_files:
-            from prepare_data import convert_jsonl
-            convert_jsonl(jsonl_files, "data/pretrain_text.txt")
-            texts.append(open("data/pretrain_text.txt").read())
-        for p in txt_files:
-            texts.append(open(p).read())
-        text = "\n".join(texts)
-    elif is_dialogue:
-        # 对话/SFT：用对话格式 jsonl
-        dia_paths = args.dialogue_data or ["data/dialogue_zh.txt"]
-        expanded = []
-        for p in dia_paths:
-            if os.path.isdir(p):
-                expanded.extend(sorted(glob.glob(os.path.join(p, "*.jsonl")) +
-                                        glob.glob(os.path.join(p, "*.txt"))))
-            else:
-                expanded.append(p)
-        dia_paths = expanded
-        all_exist = all(os.path.exists(p) for p in dia_paths)
-        if not all_exist and dia_paths == ["data/dialogue_zh.txt"]:
-            from prepare_data import generate_simple_zh
-            generate_simple_zh(dia_paths[0], repeat=50)
-        data_files = dia_paths
-        jsonl_files = [p for p in dia_paths if p.endswith(".jsonl")]
-        txt_files = [p for p in dia_paths if p.endswith(".txt")]
-        texts = []
-        if jsonl_files:
-            from prepare_data import convert_jsonl
-            convert_jsonl(jsonl_files, "data/dialogue_train.jsonl.txt")
-            texts.append(open("data/dialogue_train.jsonl.txt").read())
-        for p in txt_files:
-            texts.append(open(p).read())
-        text = "\n".join(texts) if texts else ""
-    else:
-        text = get_data(lang)
-        if config:
-            tok_c = CharTokenizer(text)
-            if tok_c.vocab_size > config.vocab_size:
-                keep = [f for f in get_data_paths(lang) if "hlm" not in f]
-                text = "\n".join(open(f, encoding="utf-8").read() for f in keep)
+    if not text:
+        if args.mode == "pretrain":
+            exclude = {"sft_t2t_mini.jsonl", "agent_rl.jsonl", "agent_rl_math.jsonl",
+                       "yuki_ruozhiba_1.5k.jsonl", "dialogue_train.jsonl.txt",
+                       "dialogue_train.txt", "dialogue_zh.txt", "pretrain_text.txt"}
+            paths = glob.glob("data/*.jsonl") + glob.glob("data/*.txt")
+            paths = [p for p in paths if os.path.basename(p) not in exclude]
+            data_files = paths
+            jsonl_files = [p for p in paths if p.endswith(".jsonl")]
+            txt_files = [p for p in paths if p.endswith(".txt")]
+            texts = []
+            if jsonl_files:
+                from prepare_data import convert_jsonl
+                convert_jsonl(jsonl_files, "data/pretrain_text.txt")
+                texts.append(open("data/pretrain_text.txt").read())
+            for p in txt_files:
+                texts.append(open(p).read())
+            text = "\n".join(texts)
+        elif is_dialogue:
+            dia_paths = args.dialogue_data or ["data/dialogue_zh.txt"]
+            expanded = []
+            for p in dia_paths:
+                if os.path.isdir(p):
+                    expanded.extend(sorted(glob.glob(os.path.join(p, "*.jsonl")) +
+                                           glob.glob(os.path.join(p, "*.txt"))))
+                else:
+                    expanded.append(p)
+            dia_paths = expanded
+            all_exist = all(os.path.exists(p) for p in dia_paths)
+            if not all_exist and dia_paths == ["data/dialogue_zh.txt"]:
+                from prepare_data import generate_simple_zh
+                generate_simple_zh(dia_paths[0], repeat=50)
+            data_files = dia_paths
+            jsonl_files = [p for p in dia_paths if p.endswith(".jsonl")]
+            txt_files = [p for p in dia_paths if p.endswith(".txt")]
+            texts = []
+            if jsonl_files:
+                from prepare_data import convert_jsonl
+                convert_jsonl(jsonl_files, "data/dialogue_train.jsonl.txt")
+                texts.append(open("data/dialogue_train.jsonl.txt").read())
+            for p in txt_files:
+                texts.append(open(p).read())
+            text = "\n".join(texts) if texts else ""
+        else:
+            text = get_data(lang)
+            if config:
+                tok_c = CharTokenizer(text)
+                if tok_c.vocab_size > config.vocab_size:
+                    keep = [f for f in get_data_paths(lang) if "hlm" not in f]
+                    text = "\n".join(open(f).read() for f in keep)
 
     # Tokenizer（BPE 模式统一用 BPE）
     # 编码缓存：如果数据没变直接加载

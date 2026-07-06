@@ -9,7 +9,7 @@ PRETRAIN_ARGS ?= --preset 100M --max-iters 50000 --batch-size 6
 PRETRAIN_RESUME_ARGS ?= --preset 100M --max-iters 100000 --batch-size 6
 
 # ── SFT 参数 ──
-SFT_DATA ?= data/agent_rl.jsonl data/agent_rl_math.jsonl
+SFT_DATA ?= data/yuki_ruozhiba_1.5k.jsonl data/sft_t2t_mini.jsonl
 SFT_ARGS ?= --batch-size 4 --max-iters 50000 --lr 1e-4
 
 help:
@@ -56,7 +56,7 @@ sft: tokenizer
 	  --dialogue-data $(SFT_DATA) $(SFT_ARGS)
 
 sft-resume:
-	python minigpt.py --train --mode sft --resume $(SFT_ARGS)
+	python minigpt.py --train --mode sft --resume --dialogue-data $(SFT_DATA) $(SFT_ARGS)
 
 chat-sft:
 	python chat.py --mode combined --checkpoint checkpoint/minigpt_sft.pt $(CHAT_ARGS)
