@@ -30,13 +30,11 @@ def _infer_config(state_dict: dict) -> GPTConfig:
 
 def load_model(mode: str = "completion", lang: str = "en", device: str = "cpu"):
     """加载模型"""
-    if mode == "dialogue":
-        # 对话模式：BPE tokenizer + dialogue checkpoint
+    if mode in ("dialogue", "combined"):
         from tokenizer import load_tokenizer
         tokenizer = load_tokenizer("checkpoint/tokenizer.json")
-        ckpt_name = "minigpt_dialogue"
+        ckpt_name = f"minigpt_{mode}"
     else:
-        # 续写模式：CharTokenizer + lang-specific checkpoint
         text = get_data(lang)
         tokenizer = CharTokenizer(text)
         ckpt_name = f"minigpt_{lang}"
@@ -68,8 +66,8 @@ def load_model(mode: str = "completion", lang: str = "en", device: str = "cpu"):
 def main():
     import argparse
     parser = argparse.ArgumentParser(description="Mini GPT Chat")
-    parser.add_argument("--mode", choices=["completion", "dialogue"], default="completion",
-                        help="续写 / 对话")
+    parser.add_argument("--mode", choices=["completion", "dialogue", "combined"],
+                        default="completion", help="completion=续写 dialogue=对话 combined=混合")
     parser.add_argument("--lang", choices=["en", "zh", "both"], default="en",
                         help="语言（续写模式）")
     parser.add_argument("--temperature", type=float, default=0.8)
@@ -81,7 +79,8 @@ def main():
     device = args.device
     mode = args.mode
 
-    print(f"加载 Mini GPT ({'对话' if mode == 'dialogue' else '续写'})...")
+    mode_name = {"completion": "续写", "dialogue": "对话", "combined": "混合"}
+    print(f"加载 Mini GPT ({mode_name.get(mode, mode)})...")
     model, tokenizer = load_model(mode, args.lang, device)
 
     eos_id = tokenizer.eos_id
@@ -89,7 +88,8 @@ def main():
     end_tag = "<|end|>"
 
     print(f"\n{'='*60}")
-    print(f"  Mini GPT ({'对话模式' if mode == 'dialogue' else '续写模式'})")
+    mode_title = {"completion": "续写模式", "dialogue": "对话模式", "combined": "混合模式（对话+续写）"}
+    print(f"  Mini GPT ({mode_title.get(mode, mode)})")
     print(f"  温度={args.temperature}  top-k={args.top_k}")
     print(f"  输入 /temp 0.6 调温度，/topk 20 调 top-k")
     print(f"  输入 /quit 或 Ctrl+C 退出")
