@@ -20,6 +20,7 @@ import math
 import time
 import os
 from typing import Optional
+import glob
 
 from config import GPTConfig, TrainConfig, get_config
 
@@ -562,12 +563,20 @@ def main():
         text = "\n".join(open(f, encoding="utf-8").read() for f in data_files)
     elif is_dialogue:
         dia_paths = args.dialogue_data or ["data/dialogue_zh.txt"]
-        # 检查数据是否存在
+        # 展开目录：扫描所有 .jsonl 文件
+        expanded = []
+        for p in dia_paths:
+            if os.path.isdir(p):
+                expanded.extend(sorted(glob.glob(os.path.join(p, "*.jsonl"))))
+            else:
+                expanded.append(p)
+        dia_paths = expanded
+        # 检查数据
         all_exist = all(os.path.exists(p) for p in dia_paths)
         if not all_exist and dia_paths == ["data/dialogue_zh.txt"]:
             from prepare_data import generate_simple_zh
             generate_simple_zh(dia_paths[0], repeat=50)
-        # 如果有 JSONL 文件，统一转换
+        # JSONL 统一转换
         jsonl_files = [p for p in dia_paths if p.endswith(".jsonl")]
         if jsonl_files:
             from prepare_data import convert_jsonl

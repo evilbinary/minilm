@@ -125,6 +125,7 @@ def load_tokenizer(path: str = "checkpoint/tokenizer.json") -> BPETokenizer:
 if __name__ == "__main__":
     # 命令行训练 tokenizer
     import argparse
+    import json, tempfile
     parser = argparse.ArgumentParser()
     parser.add_argument("--files", nargs="+", default=[
         "data/tinyshakespeare.txt", "data/xyj.txt", "data/hlm.txt"
@@ -133,5 +134,28 @@ if __name__ == "__main__":
     parser.add_argument("--save", default="checkpoint/tokenizer.json")
     args = parser.parse_args()
 
-    tok = train_tokenizer(args.files, args.vocab_size, args.save)
+    # JSONL 文件 → 临时纯文本
+    txt_files = []
+    for f in args.files:
+        if f.endswith(".jsonl"):
+            tmp = tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False, encoding="utf-8")
+            with open(f, encoding="utf-8") as jf:
+                for line in jf:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        conv = data.get("conversations", data.get("messages", []))
+                        for msg in conv:
+                            tmp.write(msg["content"] + "\n")
+                    except json.JSONDecodeError:
+                        continue
+            tmp.close()
+            txt_files.append(tmp.name)
+            print(f"  展开 JSONL: {f} → {tmp.name}")
+        else:
+            txt_files.append(f)
+
+    tok = train_tokenizer(txt_files, args.vocab_size, args.save)
     print(f"测试: {tok.decode(tok.encode('你好 <|assistant|>Hello world!'))}")

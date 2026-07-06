@@ -3,3 +3,4 @@
 *.pyc
 *.claude
 .venv
+Makefile

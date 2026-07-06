@@ -34,6 +34,7 @@ help:
 	@echo "示例:"
 	@echo "  make dialogue DIA_DATA=data/yuki_ruozhiba_1.5k.jsonl"
 	@echo "  make dialogue DIA_DATA='data/a.jsonl data/b.jsonl'"
+	@echo "  make dialogue DIA_DATA=data/   (目录自动扫描所有 .jsonl)"
 	@echo "  make dialogue DIA_ARGS='--preset 200M --max-iters 10000'"
 
 # ── 续写 ──
@@ -58,7 +59,7 @@ all: data train generate
 # ── 对话 ──
 
 tokenizer:
-	python tokenizer.py --files data/tinyshakespeare.txt data/xyj.txt --save checkpoint/tokenizer.json
+	python tokenizer.py --files data/tinyshakespeare.txt data/xyj.txt data/*.jsonl --save checkpoint/tokenizer.json
 
 dialogue: tokenizer
 	python minigpt.py --train --mode dialogue --dialogue-data $(DIA_DATA) $(DIA_ARGS)
