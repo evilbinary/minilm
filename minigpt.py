@@ -335,11 +335,18 @@ def download_data(lang: str = "en"):
             print(f"  已保存 {path}")
 
 
+def _encode_chunked(text: str, tokenizer, chunk_size: int = 10*1024*1024):
+    """分块编码，避免大文本时 Python int 列表爆内存"""
+    chunks = []
+    for i in range(0, len(text), chunk_size):
+        chunks.append(torch.tensor(tokenizer.encode(text[i:i+chunk_size]), dtype=torch.long))
+    return torch.cat(chunks)
+
+
 def make_dataloaders(text: str, tokenizer,
                      config: GPTConfig, batch_size: int = 32):
-    """创建训练/验证 DataLoader"""
-    data = torch.tensor(tokenizer.encode(text), dtype=torch.long)
-    # 切分成不重叠的 segment，打散后按 9:1 切分
+    """创建训练/验证 DataLoader（分块编码防 OOM）"""
+    data = _encode_chunked(text, tokenizer)
     seg_len = config.max_seq_len + 1  # 多 1 留给 target
     n_seg = len(data) // seg_len
     data = data[:n_seg * seg_len].view(n_seg, seg_len)
@@ -366,10 +373,9 @@ def make_dialogue_dataloaders(text: str, tokenizer,
                                assistant_id: int = 4, end_id: int = 2):
     """
     对话格式 DataLoader — 生成 (input, target, loss_mask)。
-
-    loss_mask: 只在 assistant 回复部分计算 loss，忽略 user 输入。
+    分块编码防 OOM。
     """
-    data = torch.tensor(tokenizer.encode(text), dtype=torch.long)
+    data = _encode_chunked(text, tokenizer)
     seg_len = config.max_seq_len + 1
     n_seg = max(1, len(data) // seg_len)
     # 取整并 reshape
@@ -382,19 +388,23 @@ def make_dialogue_dataloaders(text: str, tokenizer,
     train_seg, val_seg = data[indices[:n_train]], data[indices[n_train:]]
 
     def make_mask(seg: torch.Tensor) -> torch.Tensor:
-        """构建 loss_mask: 1=assistant 回答部分, 0=user 输入"""
+        """loss_mask: 1=assistant回答/纯文本, 0=user输入。纯文本全部参与 loss"""
         mask = torch.zeros(seg_len, dtype=torch.float)
         in_assistant = False
+        has_assistant = False
         for i in range(seg_len):
             tok = seg[i].item()
             if tok == assistant_id:
                 in_assistant = True
-                mask[i] = 0.0  # <|assistant|> 本身不算
+                has_assistant = True
+                mask[i] = 0.0
             elif tok == end_id:
                 in_assistant = False
-                mask[i] = 0.0  # <|end|> 本身不算
+                mask[i] = 0.0
             elif in_assistant:
                 mask[i] = 1.0
+        if not has_assistant:
+            mask[:] = 1.0  # 纯文本：全部参与 loss 计算
         return mask
 
     def get_batch(src):

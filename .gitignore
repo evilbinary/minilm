@@ -5,3 +5,4 @@
 .venv
 Makefile
 data/dialogue_train.txt
+data/dialogue_train.jsonl.txt
