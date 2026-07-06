@@ -381,47 +381,48 @@ def _encode_chunked(text: str, tokenizer, chunk_size: int = 50*1024*1024,
 def make_dataloaders(text: str, tokenizer,
                      config: GPTConfig, batch_size: int = 32,
                      cache_key: str = None):
-    """流式 DataLoader：不重复采样，遍历全数据后自动开始新 epoch"""
+    """按行采样的流式 DataLoader，不截断句子，不重复取"""
     import random
     seg_len = config.max_seq_len + 1
-    total_chars = len(text)
-    step = 2000  # 每 2000 字符采一个起点（~512 token 重叠滑动）
 
-    # 预计算所有起始位置，打散后顺序取
-    positions = list(range(0, total_chars - 5000, step))
-    random.shuffle(positions)
+    # 按行切分
+    lines = text.splitlines(keepends=True)
+    # 合并小行：每 ~2000 字符一块（确保每块至少能出 1 个 segment）
+    chunks = []
+    buf = ""
+    for line in lines:
+        buf += line
+        if len(buf) >= 2000:
+            chunks.append(buf)
+            buf = ""
+    if buf:
+        chunks.append(buf)
 
-    def _decode(pos):
-        """从 pos 读取文本并编码为 token ids"""
-        chunk = text[pos:pos + 5000]
+    random.shuffle(chunks)
+    n_train = max(1, int(len(chunks) * 0.9))
+    if n_train >= len(chunks):
+        n_train = len(chunks) - 1
+    train_chunks = chunks[:n_train]
+    val_chunks = chunks[n_train:]
+    ptr_train, ptr_val = [0], [0]
+
+    def _decode_one(chunk: str):
+        """编码一段文本，取前 seg_len 个 token"""
         ids = tokenizer.encode(chunk)
         if len(ids) >= seg_len:
             return ids[:seg_len]
         return None
 
-    # 训练/验证 9:1 切分位置列表
-    n_train = max(1, int(len(positions) * 0.9))
-    if n_train >= len(positions):
-        n_train = len(positions) - 1
-    pos_train = positions[:n_train]
-    pos_val = positions[n_train:]
-    # 每个线程独立指针
-    ptr_train, ptr_val = [0], [0]
-    shuffle_interval = max(n_train, 1)
-
-    def _iter_once(pptr, ppos, is_train):
-        """一轮迭代：取一个 batch 的位置，前进指针，到底了重新打散"""
+    def _iter_once(ptr, pool):
         xs, ys = [], []
         for _ in range(batch_size):
-            if pptr[0] >= len(ppos):
-                random.shuffle(ppos)
-                pptr[0] = 0
-            pos = ppos[pptr[0]]
-            pptr[0] += 1
-            ids = _decode(pos)
-            if ids is None and is_train:
-                continue  # 跳过无效位置，训练时可以容忍少几个
-            if ids is not None:
+            if ptr[0] >= len(pool):
+                random.shuffle(pool)
+                ptr[0] = 0
+            chunk = pool[ptr[0]]
+            ptr[0] += 1
+            ids = _decode_one(chunk)
+            if ids:
                 xs.append(torch.tensor(ids[:-1], dtype=torch.long))
                 ys.append(torch.tensor(ids[1:], dtype=torch.long))
         if not xs:
@@ -429,15 +430,12 @@ def make_dataloaders(text: str, tokenizer,
         return torch.stack(xs), torch.stack(ys)
 
     class DataLoader:
-        def __init__(self, positions, ptr, is_train):
-            self.positions = positions
-            self.ptr = ptr
-            self.is_train = is_train
+        def __init__(self, pool, ptr, is_train):
+            self.pool, self.ptr, self.is_train = pool, ptr, is_train
         def __iter__(self): return self
-        def __next__(self):
-            return _iter_once(self.ptr, self.positions, self.is_train)
+        def __next__(self): return _iter_once(self.ptr, self.pool)
 
-    return DataLoader(pos_train, ptr_train, True), DataLoader(pos_val, ptr_val, False)
+    return DataLoader(train_chunks, ptr_train, True), DataLoader(val_chunks, ptr_val, False)
 
 
 def make_dialogue_dataloaders(text: str, tokenizer,
@@ -594,8 +592,17 @@ def main():
     parser.add_argument("--n-layers", type=int, default=None, help="Transformer 层数")
     parser.add_argument("--n-heads", type=int, default=None, help="注意力头数")
     parser.add_argument("--d-ff", type=int, default=None, help="FFN 隐藏层维度")
-    parser.add_argument("--device", default=("cuda" if torch.cuda.is_available() else "cpu"))
+    parser.add_argument("--device", default=None)
     args = parser.parse_args()
+    if args.device is None:
+        if torch.cuda.is_available():
+            try:
+                free_mem = torch.cuda.mem_get_info()[0] / 1024**3
+                args.device = "cuda" if free_mem > 2 else "cpu"
+            except:
+                args.device = "cpu"
+        else:
+            args.device = "cpu"
 
     # 语言相关配置
     lang = args.lang

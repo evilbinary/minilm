@@ -5,12 +5,12 @@ CHAT_ARGS ?= --temperature 0.8
 MODEL_LANG ?= both
 
 # ── 预训练参数 ──
-PRETRAIN_ARGS ?= --preset 100M --max-iters 50000 --batch-size 4
-PRETRAIN_RESUME_ARGS ?= --preset 100M --max-iters 100000 --batch-size 4
+PRETRAIN_ARGS ?= --preset 100M --max-iters 50000 --batch-size 6
+PRETRAIN_RESUME_ARGS ?= --preset 100M --max-iters 100000 --batch-size 6
 
 # ── SFT 参数 ──
 SFT_DATA ?= data/sft_t2t_mini.jsonl data/agent_rl.jsonl data/agent_rl_math.jsonl
-SFT_ARGS ?= --preset 100M --max-iters 20000 --batch-size 4
+SFT_ARGS ?= --preset 100M --max-iters 20000 --batch-size 16
 
 help:
 	@echo "Mini GPT — 两阶段训练"
@@ -47,7 +47,7 @@ pretrain-resume:
 	python minigpt.py --train --mode pretrain --resume $(PRETRAIN_RESUME_ARGS)
 
 chat-pretrain:
-	python chat.py --mode combined $(CHAT_ARGS)
+	python chat.py --checkpoint checkpoint/minigpt_pretrain.pt --temperature 0.8
 
 # ── SFT（从预训练模型微调）──
 

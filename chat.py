@@ -28,21 +28,27 @@ def _infer_config(state_dict: dict) -> GPTConfig:
                      n_heads=8 if d_model % 8 == 0 else 4, d_ff=d_ff)
 
 
-def load_model(mode: str = "completion", lang: str = "en", device: str = "cpu"):
-    """加载模型"""
-    if mode in ("dialogue", "combined"):
+def load_model(mode: str = "completion", lang: str = "en", device: str = "cpu",
+               ckpt: str = None):
+    """加载模型（ckpt 指定路径时覆盖默认）"""
+    if ckpt:
+        # 直接指定路径
+        paths = [ckpt]
+        is_bpe = any(tag in ckpt for tag in ["pretrain", "dialogue", "combined", "sft"])
+        from tokenizer import load_tokenizer
+        tokenizer = load_tokenizer("checkpoint/tokenizer.json") if is_bpe else CharTokenizer(get_data(lang))
+    elif mode in ("dialogue", "combined"):
         from tokenizer import load_tokenizer
         tokenizer = load_tokenizer("checkpoint/tokenizer.json")
         ckpt_name = f"minigpt_{mode}"
+        paths = [f"checkpoint/{ckpt_name}.pt", f"checkpoint/{ckpt_name}_checkpoint.pt"]
     else:
         text = get_data(lang)
         tokenizer = CharTokenizer(text)
         ckpt_name = f"minigpt_{lang}"
+        paths = [f"checkpoint/{ckpt_name}.pt", f"checkpoint/{ckpt_name}_checkpoint.pt"]
 
-    ckpt_path = f"checkpoint/{ckpt_name}_checkpoint.pt"
-    model_path = f"checkpoint/{ckpt_name}.pt"
-
-    for path in [model_path, ckpt_path]:
+    for path in paths:
         if not os.path.exists(path):
             continue
         data = torch.load(path, map_location=device, weights_only=False)
@@ -68,6 +74,8 @@ def main():
     parser = argparse.ArgumentParser(description="Mini GPT Chat")
     parser.add_argument("--mode", choices=["completion", "dialogue", "combined"],
                         default="completion", help="completion=续写 dialogue=对话 combined=混合")
+    parser.add_argument("--checkpoint", type=str, default=None,
+                        help="直接指定 checkpoint 路径（覆盖 mode 的默认路径）")
     parser.add_argument("--lang", choices=["en", "zh", "both"], default="en",
                         help="语言（续写模式）")
     parser.add_argument("--temperature", type=float, default=0.8)
@@ -81,17 +89,23 @@ def main():
     device = args.device
     if device is None:
         if torch.cuda.is_available():
-            free_mem = torch.cuda.mem_get_info()[0] / 1024**3
-            device = "cuda" if free_mem > 2 else "cpu"
-            if device == "cpu":
-                print(f"  ⚠ GPU 显存不足 ({free_mem:.1f}G 空闲)，自动切换到 CPU")
+            try:
+                free_mem = torch.cuda.mem_get_info()[0] / 1024**3
+                if free_mem > 2:
+                    device = "cuda"
+                else:
+                    device = "cpu"
+                    print(f"  ⚠ GPU 显存不足 ({free_mem:.1f}G 空闲)，切到 CPU")
+            except:
+                device = "cpu"
+                print("  ⚠ GPU 不可用，切到 CPU")
         else:
             device = "cpu"
     mode = args.mode
 
     mode_name = {"completion": "续写", "dialogue": "对话", "combined": "混合"}
     print(f"加载 Mini GPT ({mode_name.get(mode, mode)})...")
-    model, tokenizer = load_model(mode, args.lang, device)
+    model, tokenizer = load_model(mode, args.lang, device, ckpt=args.checkpoint)
 
     eos_id = tokenizer.eos_id
     user_tag = "<|user|>"
@@ -136,7 +150,9 @@ def main():
                 continue
 
         # 对话/混合模式：自动包装 <|user|> 标签
-        if mode in ("dialogue", "combined"):
+        if args.checkpoint and "pretrain" in args.checkpoint:
+            input_text = prompt  # 预训练模型：续写，不加标签
+        elif mode in ("dialogue", "combined"):
             input_text = f"{user_tag}{prompt}{end_tag}\n<|assistant|>"
         else:
             input_text = prompt
@@ -155,7 +171,9 @@ def main():
         generated = tokenizer.decode(out_ids[0].tolist())
 
         # 提取新生成的内容
-        if mode in ("dialogue", "combined"):
+        if args.checkpoint and "pretrain" in args.checkpoint:
+            reply = generated[len(input_text):]  # 预训练：不加标签，直接续写结果
+        elif mode in ("dialogue", "combined"):
             reply = generated[len(input_text):]
             for tag in [end_tag, "<|user|>", "<|assistant|>"]:
                 reply = reply.split(tag)[0]
