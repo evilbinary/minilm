@@ -1,172 +1,191 @@
 """
-对话数据准备脚本 — 下载并格式化对话数据。
-
-支持的数据集:
-    - simple_zh: 简单中文问答（内置，无需下载）
-    - openassistant: OpenAssistant 对话数据集
+数据准备脚本 — 统一处理预训练和 SFT 数据。
 
 用法:
-    python prepare_data.py --dataset simple_zh
-    python prepare_data.py --dataset simple_zh --format dialogue
+    python prepare_data.py pretrain                    # 准备预训练数据
+    python prepare_data.py sft                         # 准备 SFT 数据
+    python prepare_data.py --mode pretrain --output data/pretrain_text.txt
+    python prepare_data.py --mode sft --files data/moss_sft.jsonl
 """
 
+import json
 import os
-import json  # noqa
-from tokenizer import load_tokenizer
+import re
+import glob
 
 
-SIMPLE_ZH_DIALOGUES = [
-    # ── 日常对话 ──
-    [
-        {"role": "user", "content": "你好"},
-        {"role": "assistant", "content": "你好！有什么可以帮助你的吗？"},
-    ],
-    [
-        {"role": "user", "content": "今天天气怎么样？"},
-        {"role": "assistant", "content": "抱歉，我无法查询实时天气，建议查看天气预报 App。"},
-    ],
-    [
-        {"role": "user", "content": "你是谁？"},
-        {"role": "assistant", "content": "我是 Mini GPT，一个基于 Transformer 的语言模型。"},
-    ],
-    [
-        {"role": "user", "content": "你会做什么？"},
-        {"role": "assistant", "content": "我可以帮你写文章、回答问题、翻译文字、编写代码等。"},
-    ],
-    # ── 知识问答 ──
-    [
-        {"role": "user", "content": "什么是机器学习？"},
-        {"role": "assistant", "content": "机器学习是人工智能的一个分支，让计算机从数据中学习规律和模式，而不需要显式编程。常见方法有监督学习、无监督学习和强化学习。"},
-    ],
-    [
-        {"role": "user", "content": "Python 是什么？"},
-        {"role": "assistant", "content": "Python 是一种高级编程语言，以其简洁易读的语法著称。广泛应用于数据分析、Web 开发、人工智能等领域。"},
-    ],
-    [
-        {"role": "user", "content": "什么是 Transformer？"},
-        {"role": "assistant", "content": "Transformer 是一种基于自注意力机制的神经网络架构，由 Google 在 2017 年提出。它是 GPT、BERT 等大语言模型的基础，核心创新是自注意力机制和位置编码。"},
-    ],
-    # ── 英文 ──
-    [
-        {"role": "user", "content": "Hello, how are you?"},
-        {"role": "assistant", "content": "Hello! I'm doing well, thank you for asking. How can I help you today?"},
-    ],
-    [
-        {"role": "user", "content": "What is the capital of France?"},
-        {"role": "assistant", "content": "The capital of France is Paris, known for its art, culture, and landmarks such as the Eiffel Tower."},
-    ],
-    [
-        {"role": "user", "content": "Tell me about deep learning."},
-        {"role": "assistant", "content": "Deep learning is a subset of machine learning that uses neural networks with multiple layers (hence 'deep') to learn hierarchical representations of data. It excels at tasks like image recognition, natural language processing, and speech recognition."},
-    ],
-    # ── 编程 ──
-    [
-        {"role": "user", "content": "用 Python 写一个快速排序"},
-        {"role": "assistant", "content": "```python\ndef quicksort(arr):\n    if len(arr) <= 1:\n        return arr\n    pivot = arr[len(arr) // 2]\n    left = [x for x in arr if x < pivot]\n    middle = [x for x in arr if x == pivot]\n    right = [x for x in arr if x > pivot]\n    return quicksort(left) + middle + quicksort(right)\n```"},
-    ],
-    [
-        {"role": "user", "content": "解释一下 Git 的用法"},
-        {"role": "assistant", "content": "Git 是分布式版本控制系统。基本用法：\n1. git init — 初始化仓库\n2. git add — 暂存文件\n3. git commit — 提交更改\n4. git push — 推送到远程\n5. git pull — 拉取最新代码"},
-    ],
-    # ── 多轮对话 ──
-    [
-        {"role": "user", "content": "给我讲个笑话"},
-        {"role": "assistant", "content": "程序员问妻子：我去超市买点东西，马上回来。\n妻子说：顺便买一盒牛奶。\n程序员：好的。\n二十年后...\n妻子：你买的牛奶呢？\n程序员：啊！我忘了买牛奶！"},
-    ],
-    [
-        {"role": "user", "content": "再讲一个"},
-        {"role": "assistant", "content": "为什么程序员总是在万圣节和圣诞节搞混？\n因为 Oct 31 == Dec 25！"},
-    ],
-]
+# ── 清洗函数 ─────────────────────────────
 
+def clean_content(text: str) -> str:
+    """去掉 MOSS 标签、多余空格，保留正文"""
+    text = re.sub(r'<\|[A-Za-z]+\|>:\s*', '', text)  # <|Human|>: 等
+    for tag in ['<eoh>', '<eoa>', '<eom>', '<eos>']:
+        text = text.replace(tag, '')
+    return text.strip()
+
+
+def has_json_pattern(text: str) -> bool:
+    """检查文本是否含有 JSON 结构（用于过滤）"""
+    patterns = ['"role":', '"content":', '"conversations":', '"messages":',
+                '"text":', '"gt":', '"tools":', '"reasoning_content"',
+                '"Inner Thoughts"', '"Commands"']
+    return any(p in text for p in patterns)
+
+
+# ── 格式转换 ─────────────────────────────
 
 def format_dialogue(messages: list[dict]) -> str:
-    """将对话列表格式化为一行训练文本（system/user→<|user|>, assistant→<|assistant|>）"""
+    """对话列表 → <|user|>...<|end|><|assistant|>...<|end|> 格式"""
     parts = []
     for msg in messages:
-        role = msg["role"]
+        role = msg.get("role", "")
         tag = "<|assistant|>" if role == "assistant" else "<|user|>"
-        content = msg["content"].replace("\n", " ").replace("\r", " ")
-        if content.strip():
+        content = msg.get("content", "").replace("\n", " ").replace("\r", " ")
+        content = clean_content(content)
+        if content:
             parts.append(f"{tag}{content}<|end|>")
     return "".join(parts)
 
 
-def generate_simple_zh(output: str = "data/dialogue_zh.txt", repeat: int = 50):
-    """生成内置的中文对话数据（repeat 次重复以增加数据量）"""
-    dialogues = SIMPLE_ZH_DIALOGUES
-    lines = []
-    for _ in range(repeat):
-        for d in dialogues:
-            lines.append(format_dialogue(d))
-    text = "\n".join(lines)
-    os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
-    with open(output, "w", encoding="utf-8") as f:
-        f.write(text)
-    print(f"已生成 {len(dialogues)} 条对话 → {output} ({len(text)} 字符)")
-    return output
+# ── 预处理对话格式（统一各种 JSONL 格式）──
+
+def extract_conversations(data: dict) -> list[dict]:
+    """从 JSON 行中提取对话列表，支持多种格式"""
+    # 标准格式: {"conversations": [{"role":"user","content":"..."}, ...]}
+    # MOSS 格式: {"chat": {"turn_1": {"Human":"...", "MOSS":"..."}, ...}}
+    # 消息格式: {"messages": [{"role":"user","content":"..."}, ...]}
+
+    conv = data.get("conversations") or data.get("messages") or data.get("chat")
+    if conv is None:
+        return []
+
+    if isinstance(conv, dict):
+        # MOSS 格式: {"turn_1": {...}, "turn_2": {...}}
+        result = []
+        for key in sorted(conv.keys(), key=lambda k: int(k.split("_")[1])):
+            turn = conv[key]
+            if turn.get("Human"):
+                result.append({"role": "user", "content": clean_content(turn["Human"])})
+            if turn.get("MOSS"):
+                result.append({"role": "assistant", "content": clean_content(turn["MOSS"])})
+        return result
+
+    if isinstance(conv, list):
+        return conv
+
+    return []
 
 
-def convert_jsonl(jsonl_paths, output: str = None):
-    """将一个或多个 JSONL 文件转换为训练文本格式"""
-    import json
+# ── 文件处理 ─────────────────────────────
+
+def convert_jsonl(jsonl_paths: list[str], output: str = None,
+                  max_lines: int = None, skip_json: bool = True) -> str:
+    """将 JSONL 文件转换为训练文本"""
     if isinstance(jsonl_paths, str):
         jsonl_paths = [jsonl_paths]
-    dialogues = []
+
+    all_lines = []
     for path in jsonl_paths:
         with open(path, "r", encoding="utf-8") as f:
-            for line in f:
+            for i, line in enumerate(f):
+                if max_lines and i >= max_lines:
+                    break
                 line = line.strip()
                 if not line:
                     continue
                 try:
                     data = json.loads(line)
-                    conv = data.get("conversations", data.get("messages", []))
-                    if conv:
-                        dialogues.append(format_dialogue(conv))
                 except json.JSONDecodeError:
                     continue
-    text = "\n".join(dialogues)
+
+                # 尝试多种格式
+                conv = extract_conversations(data)
+                if conv:
+                    text = format_dialogue(conv)
+                elif "text" in data and data["text"].strip():
+                    text = clean_content(data["text"])
+                else:
+                    continue
+
+                # 过滤 JSON 残留
+                if skip_json and has_json_pattern(text):
+                    continue
+                if text:
+                    all_lines.append(text)
+
+    result = "\n".join(all_lines)
     if output:
+        os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
         with open(output, "w", encoding="utf-8") as f:
-            f.write(text)
-        print(f"已转换 {len(dialogues)} 条对话 → {output} ({len(text)} 字符)")
-    else:
-        print(f"共 {len(dialogues)} 条对话, {len(text)} 字符")
-    return text
+            f.write(result)
+        print(f"已生成 {len(all_lines)} 条 → {output} ({len(result)/1024/1024:.0f}MB)")
+
+    return result
 
 
-def main():
-    import argparse
-    parser = argparse.ArgumentParser(description="对话数据准备")
-    parser.add_argument("--dataset", default="simple_zh",
-                        help="数据集: simple_zh")
-    parser.add_argument("--jsonl", type=str, default=None,
-                        help="JSONL 对话数据文件路径")
-    parser.add_argument("--output", default="data/dialogue_zh.txt",
-                        help="输出文件路径")
-    parser.add_argument("--repeat", type=int, default=1,
-                        help="重复次数（simple_zh 用）")
-    args = parser.parse_args()
+# ── 主入口 ─────────────────────────────
 
-    if args.jsonl:
-        convert_jsonl(args.jsonl, args.output)
-    elif args.dataset == "simple_zh":
-        generate_simple_zh(args.output, repeat=args.repeat)
-    else:
-        print(f"未知数据集: {args.dataset}")
+def prepare_pretrain(output: str = None):
+    if output is None:
+        output = "data/pretrain_text.txt"
+    """准备预训练数据：过滤所有 JSON 特征"""
+    paths = sorted(glob.glob("data/pretrain/*.jsonl") + glob.glob("data/pretrain/*.txt"))
 
-    # 验证 tokenizer 编码
-    try:
-        tok = load_tokenizer()
-        with open(args.output) as f:
-            sample = f.read()[:200]
-        ids = tok.encode(sample)
-        _ = tok.decode(ids)  # verify
-        print(f"Tokenizer 验证: {len(sample)} 字符 → {len(ids)} tokens")
-    except FileNotFoundError:
-        print("Tokenizer 未训练，请先运行 python tokenizer.py")
+    print("预训练数据文件:")
+    all_lines = []
+    for p in paths:
+        with open(p, "r", encoding="utf-8") as f:
+            raw = f.read()
+        # JSONL 文件：提取 text 字段后再过滤
+        if p.endswith(".jsonl"):
+            texts = []
+            for line in raw.split("\n"):
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    d = json.loads(line)
+                    t = d.get("text", "")
+                    if t and not has_json_pattern(t):
+                        texts.append(clean_content(t))
+                except json.JSONDecodeError:
+                    continue
+            all_lines.extend(texts)
+            print(f"  {os.path.basename(p)}: {len(texts)} 条文本 (JSONL)")
+        else:
+            lines = [l for l in raw.split("\n") if not has_json_pattern(l)]
+            all_lines.extend(lines)
+            print(f"  {os.path.basename(p)}: {len(lines)} 行")
+
+    result = "\n".join(all_lines)
+    os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
+    with open(output, "w", encoding="utf-8") as f:
+        f.write(result)
+
+    print(f"\n预训练数据已生成: {output} ({len(result)/1024/1024:.0f}MB)")
+    print(f"含 JSON 残留: {has_json_pattern(result)}")
+
+
+def prepare_sft(files: list[str] = None, output: str = None, max_lines: int = None):
+    """准备 SFT 数据：转换多种格式为统一对话格式"""
+    if output is None:
+        output = "data/sft_train.txt"
+    if files is None:
+        files = ["data/sft/sft_t2t_mini.jsonl", "data/sft/moss_sft.jsonl",
+                 "data/sft/yuki_ruozhiba_1.5k.jsonl"]
+    convert_jsonl(files, output, max_lines=max_lines, skip_json=True)
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+    parser = argparse.ArgumentParser(description="数据准备")
+    parser.add_argument("mode", choices=["pretrain", "sft"], help="pretrain / sft")
+    parser.add_argument("--files", nargs="+", help="SFT 数据文件列表")
+    parser.add_argument("--output", type=str, help="输出文件")
+    parser.add_argument("--max-lines", type=int, help="最多处理行数")
+    args = parser.parse_args()
+
+    if args.mode == "pretrain":
+        prepare_pretrain(args.output)
+    else:
+        prepare_sft(args.files, args.output, args.max_lines)

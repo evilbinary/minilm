@@ -43,6 +43,7 @@ PRESETS = {
     "100M":  dict(vocab_size=16000, max_seq_len=512, d_model=768,  n_layers=12, n_heads=12, d_ff=3072,  dropout=0.1),
     "200M":  dict(vocab_size=16000, max_seq_len=512, d_model=1024, n_layers=16, n_heads=16, d_ff=4096,  dropout=0.1),
     "400M":  dict(vocab_size=16000, max_seq_len=512, d_model=1280, n_layers=20, n_heads=16, d_ff=5120,  dropout=0.1),
+    "512M":  dict(vocab_size=16000, max_seq_len=512, d_model=1280, n_layers=24, n_heads=16, d_ff=5120,  dropout=0.1),
 }
 
 

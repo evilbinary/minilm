@@ -5,12 +5,12 @@ CHAT_ARGS ?= --temperature 0.8
 MODEL_LANG ?= both
 
 # ── 预训练参数 ──
-PRETRAIN_ARGS ?= --preset 100M --max-iters 50000 --batch-size 6
-PRETRAIN_RESUME_ARGS ?= --preset 100M --max-iters 100000 --batch-size 6
+PRETRAIN_ARGS ?= --preset 200M --max-iters 50000 --batch-size 4
+PRETRAIN_RESUME_ARGS ?= --preset 200M --max-iters 100000 --batch-size 4
 
 # ── SFT 参数 ──
-SFT_DATA ?= data/yuki_ruozhiba_1.5k.jsonl data/sft_t2t_mini.jsonl
-SFT_ARGS ?= --batch-size 4 --max-iters 50000 --lr 1e-4
+SFT_DATA ?= data/sft/sft_t2t_mini.jsonl data/sft/moss_sft.jsonl data/sft/yuki_ruozhiba_1.5k.jsonl
+SFT_ARGS ?= --preset 200M --batch-size 4 --max-iters 50000 --lr 1e-4
 
 help:
 	@echo "Mini GPT — 两阶段训练"
@@ -36,11 +36,12 @@ help:
 # ── Tokenizer ──
 
 tokenizer:
-	python tokenizer.py --files data/tinyshakespeare.txt data/xyj.txt data/hlm.txt  data/yuki_ruozhiba_1.5k.jsonl --save checkpoint/tokenizer.json
+	python tokenizer.py --files data/pretrain/tinyshakespeare.txt data/pretrain/xyj.txt data/pretrain/hlm.txt data/sft/yuki_ruozhiba_1.5k.jsonl --save checkpoint/tokenizer.json
 
 # ── 预训练 ──
 
 pretrain: tokenizer
+	python prepare_data.py pretrain
 	python minigpt.py --train --mode pretrain $(PRETRAIN_ARGS)
 
 pretrain-resume:
@@ -66,5 +67,5 @@ chat-sft:
 clean:
 	rm -rf checkpoint
 	rm -rf __pycache__
-	rm -f data/dialogue_train.txt data/dialogue_train.jsonl.txt data/pretrain_text.txt
+	rm -f data/sft_train.txt data/pretrain_text.txt
 	@echo "已清理"

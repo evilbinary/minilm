@@ -666,9 +666,9 @@ def main():
     if not text:
         if args.mode == "pretrain":
             exclude = {"sft_t2t_mini.jsonl", "agent_rl.jsonl", "agent_rl_math.jsonl",
-                       "yuki_ruozhiba_1.5k.jsonl", "dialogue_train.jsonl.txt",
-                       "dialogue_train.txt", "dialogue_zh.txt", "pretrain_text.txt"}
-            paths = glob.glob("data/*.jsonl") + glob.glob("data/*.txt")
+                       "yuki_ruozhiba_1.5k.jsonl", "sft_train.txt",
+                       "dialogue_train.txt", "dialogue_zh.txt", "pretrain_text.txt", "moss_sft.jsonl", "moss_pretrain.txt"}
+            paths = glob.glob("data/pretrain/*.jsonl") + glob.glob("data/pretrain/*.txt")
             paths = [p for p in paths if os.path.basename(p) not in exclude]
             data_files = paths
             jsonl_files = [p for p in paths if p.endswith(".jsonl")]
@@ -701,8 +701,8 @@ def main():
             texts = []
             if jsonl_files:
                 from prepare_data import convert_jsonl
-                convert_jsonl(jsonl_files, "data/dialogue_train.jsonl.txt")
-                texts.append(open("data/dialogue_train.jsonl.txt").read())
+                convert_jsonl(jsonl_files, "data/sft_train.txt")
+                texts.append(open("data/sft_train.txt").read())
             for p in txt_files:
                 texts.append(open(p).read())
             text = "\n".join(texts) if texts else ""

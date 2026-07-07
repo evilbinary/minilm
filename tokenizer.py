@@ -128,7 +128,7 @@ if __name__ == "__main__":
     import json, tempfile
     parser = argparse.ArgumentParser()
     parser.add_argument("--files", nargs="+", default=[
-        "data/tinyshakespeare.txt", "data/xyj.txt", "data/hlm.txt"
+        "data/pretrain/tinyshakespeare.txt", "data/pretrain/xyj.txt", "data/pretrain/hlm.txt"
     ])
     parser.add_argument("--vocab-size", type=int, default=16000)
     parser.add_argument("--save", default="checkpoint/tokenizer.json")
