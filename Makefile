@@ -12,7 +12,7 @@ PRETRAIN_RESUME_ARGS ?= --preset 200M --max-iters 100000 --batch-size $(BATCH_SI
 
 # ── SFT 参数 ──
 SFT_DATA ?= data/sft/sft_t2t_mini.jsonl data/sft/moss_sft.jsonl data/sft/yuki_ruozhiba_1.5k.jsonl
-SFT_ARGS ?= --preset 200M --batch-size $(BATCH_SIZE) --max-iters 50000 --lr 1e-4
+SFT_ARGS ?= --dropout 0.1 --preset 200M --batch-size $(BATCH_SIZE) --max-iters 50000 --lr 1e-4
 
 download:
 	python download_data.py

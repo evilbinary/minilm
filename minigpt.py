@@ -541,6 +541,7 @@ def main():
     parser.add_argument("--n-layers", type=int, default=None, help="Transformer 层数")
     parser.add_argument("--n-heads", type=int, default=None, help="注意力头数")
     parser.add_argument("--d-ff", type=int, default=None, help="FFN 隐藏层维度")
+    parser.add_argument("--dropout", type=float, default=None, help="Dropout（覆盖 preset）")
     parser.add_argument("--device", default=None)
     args = parser.parse_args()
     if args.device is None:
@@ -628,9 +629,12 @@ def main():
     else:
         tokenizer = CharTokenizer(text)
 
+    # 用 checkpoint 配置时也允许覆盖 dropout
+    if config is not None and args.dropout is not None:
+        config.dropout = args.dropout
     if config is None:
         overrides = {}
-        for k in ["d_model", "n_layers", "n_heads", "d_ff"]:
+        for k in ["d_model", "n_layers", "n_heads", "d_ff", "dropout"]:
             v = getattr(args, k.replace("-", "_"))
             if v is not None:
                 overrides[k] = v
