@@ -59,6 +59,11 @@ def load_model(mode: str = "completion", lang: str = "en", device: str = "cpu",
             print(f"  ⚠ 从权重反推配置: d={config.d_model} l={config.n_layers} f={config.d_ff}")
         model = MiniGPT(config).to(device)
         model.load_state_dict(state_dict)
+        if device == "cpu":
+            print("  ⚡ 应用 INT8 量化加速...")
+            model = torch.quantization.quantize_dynamic(
+                model, {torch.nn.Linear}, dtype=torch.qint8
+            )
         print(f"  已加载: {path}")
         return model, tokenizer
 
@@ -81,6 +86,7 @@ def main():
     parser.add_argument("--temperature", type=float, default=0.8)
     parser.add_argument("--top-k", type=int, default=40)
     parser.add_argument("--max-new-tokens", type=int, default=200)
+    parser.add_argument("--threads", type=int, default=4, help="CPU 线程数")
     parser.add_argument("--device", default=None,
                         help="cpu / cuda (默认自动检测，显存不足自动切 cpu)")
     args = parser.parse_args()
