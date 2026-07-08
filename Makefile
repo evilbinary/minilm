@@ -24,6 +24,9 @@ prepare: download
 tokenizer: prepare
 	python tokenizer.py --files data/pretrain/tinyshakespeare.txt data/pretrain/xyj.txt data/pretrain/hlm.txt data/sft/yuki_ruozhiba_1.5k.jsonl --save checkpoint/tokenizer.json
 
+clean-data:
+	rm -f data/pretrain_text.txt data/sft_train.txt
+
 check:
 	python3 check_data.py
 

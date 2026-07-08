@@ -128,6 +128,9 @@ def convert_jsonl(jsonl_paths: list[str], output: str = None,
 def prepare_pretrain(output: str = None):
     if output is None:
         output = "data/pretrain_text.txt"
+    if os.path.exists(output):
+        print(f"✅ {output} 已存在，跳过")
+        return
     """准备预训练数据：过滤所有 JSON 特征"""
     paths = sorted(glob.glob("data/pretrain/*.jsonl") + glob.glob("data/pretrain/*.txt"))
 
@@ -169,6 +172,9 @@ def prepare_sft(files: list[str] = None, output: str = None, max_lines: int = No
     """准备 SFT 数据：转换多种格式为统一对话格式"""
     if output is None:
         output = "data/sft_train.txt"
+    if os.path.exists(output):
+        print(f"✅ {output} 已存在，跳过")
+        return
     if files is None:
         files = ["data/sft/sft_t2t_mini.jsonl", "data/sft/moss_sft.jsonl",
                  "data/sft/yuki_ruozhiba_1.5k.jsonl"]
