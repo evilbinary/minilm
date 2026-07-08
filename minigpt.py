@@ -563,10 +563,6 @@ def main():
     lang_prompts = {"en": "O Romeo", "zh": "话说唐僧", "both": "Hello 你好"}
     default_prompt = lang_prompts.get(lang, "O Romeo")
 
-    # 仅下载
-    if args.download:
-        return
-
     do_train = args.train or not args.generate
     do_generate = args.generate or not args.train
 
