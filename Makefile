@@ -4,13 +4,15 @@
 CHAT_ARGS ?= --temperature 0.8
 MODEL_LANG ?= both
 
+BATCH_SIZE ?= 4
+
 # ── 预训练参数 ──
-PRETRAIN_ARGS ?= --preset 200M --max-iters 50000 --batch-size 4
-PRETRAIN_RESUME_ARGS ?= --preset 200M --max-iters 100000 --batch-size 4
+PRETRAIN_ARGS ?= --preset 200M --max-iters 50000 --batch-size $(BATCH_SIZE)
+PRETRAIN_RESUME_ARGS ?= --preset 200M --max-iters 100000 --batch-size $(BATCH_SIZE)
 
 # ── SFT 参数 ──
 SFT_DATA ?= data/sft/sft_t2t_mini.jsonl data/sft/moss_sft.jsonl data/sft/yuki_ruozhiba_1.5k.jsonl
-SFT_ARGS ?= --preset 200M --batch-size 4 --max-iters 50000 --lr 1e-4
+SFT_ARGS ?= --preset 200M --batch-size $(BATCH_SIZE) --max-iters 50000 --lr 1e-4
 
 download:
 	python download_data.py
