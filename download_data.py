@@ -8,11 +8,26 @@
 """
 
 import os
+import sys
 import urllib.request
 import zipfile
 import json
 
 DATA_DIR = os.path.dirname(os.path.abspath(__file__))
+
+
+class ProgressBar:
+    """下载进度条"""
+    def __init__(self, desc_text):
+        self.desc = desc_text
+    def __call__(self, block, size, total):
+        if total > 0:
+            pct = min(100, block * size * 100 / total)
+            mb = block * size / 1024 / 1024
+            total_mb = total / 1024 / 1024
+            bar = "█" * int(pct / 5) + "░" * (20 - int(pct / 5))
+            sys.stdout.write(f"\r  ⏳ {self.desc} [{bar}] {pct:.0f}% ({mb:.0f}MB/{total_mb:.0f}MB)")
+            sys.stdout.flush()
 
 
 def download(url: str, path: str, desc: str = ""):
@@ -21,9 +36,8 @@ def download(url: str, path: str, desc: str = ""):
         print(f"  ✅ {desc}: 已存在 ({os.path.getsize(path)/1024/1024:.0f}MB)")
         return
     os.makedirs(os.path.dirname(path) or ".", exist_ok=True)
-    print(f"  ⏳ 正在下载 {desc}...")
-    urllib.request.urlretrieve(url, path)
-    print(f"  ✅ 已保存: {path} ({os.path.getsize(path)/1024/1024:.0f}MB)")
+    urllib.request.urlretrieve(url, path, ProgressBar(desc))
+    print(f"\n  ✅ 已保存 ({os.path.getsize(path)/1024/1024:.0f}MB)")
 
 
 # ── 预训练数据 ──
