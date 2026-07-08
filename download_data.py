@@ -102,8 +102,8 @@ def download_all():
     print("=" * 50)
     print("Mini GPT 数据下载")
     print("=" * 50)
-    os.makedirs(f"{DATA_DIR}/pretrain", exist_ok=True)
-    os.makedirs(f"{DATA_DIR}/sft", exist_ok=True)
+    os.makedirs(f"{DATA_DIR}/data/pretrain", exist_ok=True)
+    os.makedirs(f"{DATA_DIR}/data/sft", exist_ok=True)
     download_pretrain()
     download_sft()
     expected = [
