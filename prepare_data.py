@@ -28,7 +28,8 @@ def has_json_pattern(text: str) -> bool:
     """检查文本是否含有 JSON 结构（用于过滤）"""
     patterns = ['"role":', '"content":', '"conversations":', '"messages":',
                 '"text":', '"gt":', '"tools":', '"reasoning_content"',
-                '"Inner Thoughts"', '"Commands"']
+                '"Inner Thoughts"', '"Commands"',
+                'text = "', 'text=\\"', '"text" :']
     return any(p in text for p in patterns)
 
 
