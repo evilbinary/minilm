@@ -90,7 +90,7 @@ chat-llama: setup-llama gguf
 	./$(LLAMA_DIR)/build/bin/llama-cli -m model.gguf -p "$(PROMPT)" -n $(N_TOKENS) -t $(THREADS) --temp $(TEMP)
 
 gguf:
-	python convert_model.py gguf --checkpoint checkpoint/minigpt_pretrain.pt --output model.gguf
+	python convert_model.py gguf --checkpoint checkpoint/minigpt_sft.pt --output model.gguf
 
 onnx:
 	python convert_model.py onnx --checkpoint checkpoint/minigpt_sft.pt --output model.onnx
