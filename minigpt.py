@@ -255,20 +255,16 @@ class CharTokenizer:
 
 
 DATA_DIR = "data"
-# 数据文件列表（每个语言可指定多个文件，全部用于训练）
+# 数据文件列表（completion 模式用）
 DATA_FILES = {
-    "en": ["data/tinyshakespeare.txt"],
-    "zh": ["data/xyj.txt", "data/hlm.txt"],  # 西游记 + 红楼梦
-}
-DATA_URLS = {
-    "en": ["https://raw.githubusercontent.com/karpathy/char-rnn/master/data/tinyshakespeare/input.txt"],
-    "zh": ["", ""],  # 空表示手动下载
+    "en": ["data/pretrain/tinyshakespeare.txt"],
+    "zh": ["data/pretrain/xyj.txt", "data/pretrain/hlm.txt"],
 }
 CKPT_PATH = "checkpoint/minigpt_checkpoint.pt"
 
 
 def save_checkpoint(path: str, model: MiniGPT, optimizer, step: int, best_loss: float,
-                    data_files: Optional[list] = None, vocab: Optional[dict] = None):
+                    vocab: Optional[dict] = None):
     """保存 checkpoint（仅含优化器状态，用于续训）"""
     torch.save({
         "model_state_dict": model.state_dict(),
@@ -276,7 +272,6 @@ def save_checkpoint(path: str, model: MiniGPT, optimizer, step: int, best_loss: 
         "step": step,
         "best_loss": best_loss,
         "config": model.config,
-        "data_files": data_files,
         "vocab": vocab,
     }, path)
     print(f"  [Checkpoint] 已保存 {path} (step={step})")
@@ -322,66 +317,6 @@ def get_data(lang: str = "en") -> str:
             print(f"请先下载数据集后再试")
             raise
     return "\n".join(texts)
-
-
-def download_data(lang: str = "en"):
-    """下载数据集到本地（已有则跳过）"""
-    import urllib.request
-    import os
-    os.makedirs(DATA_DIR, exist_ok=True)
-    for key in ([lang] if lang != "both" else ["en", "zh"]):
-        urls = DATA_URLS.get(key, [])
-        paths = DATA_FILES.get(key, [])
-        for i, path in enumerate(paths):
-            fname = os.path.basename(path)
-            if os.path.exists(path):
-                print(f"  [{key}] {fname} 已存在")
-                continue
-            url = urls[i] if i < len(urls) else ""
-            if not url:
-                print(f"  [{key}] {fname} 未找到，请手动放入 {path}")
-                continue
-            print(f"  正在下载 {fname}...")
-            urllib.request.urlretrieve(url, path)
-            print(f"  已保存 {path}")
-
-
-CACHE_DIR = "cache"
-os.makedirs(CACHE_DIR, exist_ok=True)
-
-
-def _encode_chunked(text: str, tokenizer, chunk_size: int = 50*1024*1024,
-                     cache_key: str = None):
-    """分块编码（直接写二进制文件，省内存）"""
-    cache_path = f"{CACHE_DIR}/tokens_{cache_key}.bin" if cache_key else None
-
-    # 有缓存 → 直接读取
-    if cache_path and os.path.exists(cache_path):
-        arr = np.fromfile(cache_path, dtype=np.int32)
-        print(f"  加载缓存: {cache_path} ({len(arr)} tokens)")
-        return torch.from_numpy(arr).to(torch.long)
-
-    total = len(text)
-    total_tokens = 0
-    tmp_path = cache_path or f"{CACHE_DIR}/_tmp_tokens.bin"
-    os.makedirs(os.path.dirname(tmp_path) or ".", exist_ok=True)
-
-    with open(tmp_path, "wb") as f:
-        for i in range(0, total, chunk_size):
-            pct = i * 100 // total
-            print(f"  编码中... {pct}% ({i//1024//1024}MB/{total//1024//1024}MB)", end="\r")
-            ids = tokenizer.encode(text[i:i+chunk_size])
-            f.write(np.array(ids, dtype=np.int32).tobytes())
-            total_tokens += len(ids)
-
-    # 从文件加载
-    arr = np.fromfile(tmp_path, dtype=np.int32)
-    data = torch.from_numpy(arr).to(torch.long)
-    print(f"\n  编码完成! {total_tokens} tokens, {total_tokens*4/1024/1024:.0f}MB")
-
-    if not cache_key:
-        os.remove(tmp_path)
-    return data
 
 
 def make_dataloaders(text: str, tokenizer,
@@ -517,7 +452,7 @@ def train(model: MiniGPT, train_loader, val_loader,
           max_iters: int = 2000, lr: float = 1e-3,
           eval_interval: int = 200, log_interval: int = 10,
           resume_from: Optional[str] = None,
-          ckpt_path: str = CKPT_PATH, data_files: Optional[list] = None,
+          ckpt_path: str = CKPT_PATH,
           vocab: Optional[dict] = None, device: str = "cpu"):
 
     optimizer = torch.optim.AdamW(model.parameters(), lr=lr, betas=(0.9, 0.95))
@@ -564,7 +499,7 @@ def train(model: MiniGPT, train_loader, val_loader,
             if loss.item() < best_loss:
                 best_loss = loss.item()
             save_checkpoint(ckpt_path, model, optimizer, step, best_loss,
-                            data_files=data_files, vocab=vocab)
+                            vocab=vocab)
             # 模型权重单独保存（每 2000 步一次）
             if step % 2000 == 0 or step == max_iters - 1:
                 model_path = ckpt_path.replace("_checkpoint.pt", ".pt")
@@ -581,7 +516,6 @@ def train(model: MiniGPT, train_loader, val_loader,
 def main():
     import argparse
     parser = argparse.ArgumentParser()
-    parser.add_argument("--download", action="store_true", help="下载数据集")
     parser.add_argument("--train", action="store_true", help="训练")
     parser.add_argument("--generate", action="store_true", help="生成")
     parser.add_argument("--max-iters", type=int, default=None)
@@ -601,7 +535,7 @@ def main():
     parser.add_argument("--resume-from", type=str, default=None,
                         help="从指定 checkpoint 加载初始权重（SFT 从 pretrain 加载）")
     parser.add_argument("--dialogue-data", type=str, nargs="+", default=None,
-                        help="对话数据文件（多个 JSONL 用空格隔开）")
+                        help="对话数据文件/目录（支持多个）")
     parser.add_argument("--preset", type=str, default=None, help="模型规格: 4.5M/16M/40M/100M/200M")
     parser.add_argument("--d-model", type=int, default=None, help="模型维度（覆盖 preset）")
     parser.add_argument("--n-layers", type=int, default=None, help="Transformer 层数")
@@ -631,26 +565,22 @@ def main():
 
     # 仅下载
     if args.download:
-        download_data(lang)
         return
 
     do_train = args.train or not args.generate
     do_generate = args.generate or not args.train
 
-    # 续训时从 checkpoint 读取数据文件列表
-    data_files = None
+    # 从 checkpoint 加载配置
     config = None
     if args.resume:
         try:
             ckpt_data = torch.load(ckpt_path, map_location="cpu", weights_only=False)
-            config = ckpt_data.get("config")
-            data_files = ckpt_data.get("data_files")
-        except Exception as e:
-            print(f"  ⚠ checkpoint 损坏 ({e}), 尝试加载模型权重...")
+            config = ckpt_data.get("config", None)
+        except Exception:
             try:
                 ckpt_data = torch.load(model_path, map_location="cpu", weights_only=False)
-                config = ckpt_data.get("config")
-            except:
+                config = ckpt_data.get("config", None)
+            except Exception:
                 config = None
         if config is None:
             print("  ⚠ checkpoint 中无配置，从权重反推")
@@ -660,59 +590,34 @@ def main():
     is_bpe = args.mode in ("dialogue", "combined", "pretrain", "sft")
 
     # 数据
-    text = ""
-    if data_files and all(os.path.exists(f) for f in data_files):
-        text = "\n".join(open(f, encoding="utf-8").read() for f in data_files)
-    if not text:
-        if args.mode == "pretrain":
-            exclude = {"sft_t2t_mini.jsonl", "agent_rl.jsonl", "agent_rl_math.jsonl",
-                       "yuki_ruozhiba_1.5k.jsonl", "sft_train.txt",
-                       "dialogue_train.txt", "dialogue_zh.txt", "pretrain_text.txt", "moss_sft.jsonl", "moss_pretrain.txt"}
-            paths = glob.glob("data/pretrain/*.jsonl") + glob.glob("data/pretrain/*.txt")
-            paths = [p for p in paths if os.path.basename(p) not in exclude]
-            data_files = paths
-            jsonl_files = [p for p in paths if p.endswith(".jsonl")]
-            txt_files = [p for p in paths if p.endswith(".txt")]
-            texts = []
-            if jsonl_files:
-                from prepare_data import convert_jsonl
-                convert_jsonl(jsonl_files, "data/pretrain_text.txt")
-                texts.append(open("data/pretrain_text.txt").read())
-            for p in txt_files:
-                texts.append(open(p).read())
-            text = "\n".join(texts)
-        elif is_dialogue:
-            dia_paths = args.dialogue_data or ["data/dialogue_zh.txt"]
-            expanded = []
-            for p in dia_paths:
-                if os.path.isdir(p):
-                    expanded.extend(sorted(glob.glob(os.path.join(p, "*.jsonl")) +
-                                           glob.glob(os.path.join(p, "*.txt"))))
-                else:
-                    expanded.append(p)
-            dia_paths = expanded
-            all_exist = all(os.path.exists(p) for p in dia_paths)
-            if not all_exist and dia_paths == ["data/dialogue_zh.txt"]:
-                from prepare_data import generate_simple_zh
-                generate_simple_zh(dia_paths[0], repeat=50)
-            data_files = dia_paths
-            jsonl_files = [p for p in dia_paths if p.endswith(".jsonl")]
-            txt_files = [p for p in dia_paths if p.endswith(".txt")]
-            texts = []
-            if jsonl_files:
-                from prepare_data import convert_jsonl
-                convert_jsonl(jsonl_files, "data/sft_train.txt")
-                texts.append(open("data/sft_train.txt").read())
-            for p in txt_files:
-                texts.append(open(p).read())
-            text = "\n".join(texts) if texts else ""
-        else:
-            text = get_data(lang)
-            if config:
-                tok_c = CharTokenizer(text)
-                if tok_c.vocab_size > config.vocab_size:
-                    keep = [f for f in get_data_paths(lang) if "hlm" not in f]
-                    text = "\n".join(open(f).read() for f in keep)
+    data_files = None
+    if args.mode == "pretrain":
+        text = open("data/pretrain_text.txt", encoding="utf-8").read()
+        data_files = ["data/pretrain_text.txt"]
+    elif is_dialogue and args.dialogue_data:
+        # 多文件/目录支持
+        paths = []
+        for p in args.dialogue_data:
+            if os.path.isdir(p):
+                paths.extend(sorted(glob.glob(os.path.join(p, "*.jsonl")) +
+                                    glob.glob(os.path.join(p, "*.txt"))))
+            elif os.path.exists(p):
+                paths.append(p)
+        data_files = [p for p in paths if p.endswith(".txt")]  # 只记 txt
+        from prepare_data import convert_jsonl
+        convert_jsonl([p for p in paths if p.endswith(".jsonl")], "data/sft_train.txt")
+        text = open("data/sft_train.txt", encoding="utf-8").read()
+        for p in data_files:
+            text += "\n" + open(p, encoding="utf-8").read()
+    elif is_dialogue:
+        text = open("data/sft_train.txt", encoding="utf-8").read()
+    else:
+        text = get_data(lang)
+        if config:
+            tok_c = CharTokenizer(text)
+            if tok_c.vocab_size > config.vocab_size:
+                keep = [f for f in get_data_paths(lang) if "hlm" not in f]
+                text = "\n".join(open(f).read() for f in keep)
 
     # Tokenizer（BPE 模式统一用 BPE）
     # 编码缓存：如果数据没变直接加载
@@ -773,7 +678,7 @@ def main():
         train(model, train_loader, val_loader, max_iters, lr,
               eval_interval=args.eval_interval, log_interval=args.log_interval,
               resume_from=ckpt_path if args.resume else None,
-              ckpt_path=ckpt_path, data_files=data_files,
+              ckpt_path=ckpt_path,
               vocab=tokenizer.stoi if hasattr(tokenizer, 'stoi') else None,
               device=args.device)
         torch.save(model.state_dict(), model_path)
