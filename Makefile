@@ -68,7 +68,7 @@ sft-resume:
 	python minigpt.py --train --mode sft --resume --dialogue-data $(SFT_DATA) $(SFT_ARGS)
 
 chat-sft:
-	python chat.py --mode combined --checkpoint checkpoint/minigpt_sft.pt $(CHAT_ARGS)
+	python chat.py --mode sft --checkpoint checkpoint/minigpt_sft.pt $(CHAT_ARGS)
 
 
 # ── 导出 ──

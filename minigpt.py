@@ -278,8 +278,8 @@ def save_checkpoint(path: str, model: MiniGPT, optimizer, step: int, best_loss: 
 
 
 def save_model(model: MiniGPT, path: str):
-    """保存模型权重（仅权重，用于推理）"""
-    torch.save(model.state_dict(), path)
+    """保存模型权重（含配置，用于推理）"""
+    torch.save({"model_state_dict": model.state_dict(), "config": model.config}, path)
     print(f"  [Model] 已保存 {path}")
 
 

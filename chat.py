@@ -26,8 +26,18 @@ def _infer_config(state_dict: dict) -> GPTConfig:
     ffn_w = state_dict["blocks.0.ffn.w1.weight"]
     d_ff = ffn_w.shape[0]
     n_layers = sum(1 for k in state_dict if k.startswith("blocks.") and k.endswith(".ln1.weight"))
+    # 从 QKV 权重推断头数: qkv shape = (3*d_model, d_model), d_model = head_dim * n_heads
+    qkv_w = state_dict["blocks.0.attn.qkv.weight"]
+    head_dim_candidates = [64, 96, 128]
+    n_heads = n_heads = 8
+    for hd in head_dim_candidates:
+        if d_model % hd == 0 and qkv_w.shape[0] % 3 == 0:
+            nh = d_model // hd
+            if nh * hd == d_model:
+                n_heads = nh
+                break
     return GPTConfig(vocab_size=vocab, d_model=d_model, n_layers=n_layers,
-                     n_heads=8 if d_model % 8 == 0 else 4, d_ff=d_ff)
+                     n_heads=n_heads, d_ff=d_ff)
 
 
 def load_model(mode: str = "completion", lang: str = "en", device: str = "cpu",
