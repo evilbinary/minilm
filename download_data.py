@@ -71,11 +71,9 @@ def download_pretrain():
 
 # ── SFT 数据 ──
 
-# MOSS 数据通过 ModelScope 下载
-MOSS_ZIP = os.path.expanduser(
-    "~/.cache/modelscope/datasets/openmoss--moss-003-sft-data/"
-    "snapshots/master/moss-003-sft-no-tools.jsonl.zip"
-)
+# MOSS 数据（自动查找路径）
+from prepare_moss import find_moss_zip
+MOSS_ZIP = find_moss_zip()
 
 
 def download_sft():

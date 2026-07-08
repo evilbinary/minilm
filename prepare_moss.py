@@ -27,15 +27,36 @@ def clean(text: str) -> str:
     return text.strip()
 
 
-def convert_moss(input_path: str, output_path: str, max_lines: int = None):
+def find_moss_zip() -> str:
+    """自动查找 MOSS zip 文件"""
+    candidates = [
+        "~/.cache/modelscope/datasets/openmoss--moss-003-sft-data/snapshots/*/moss-003-sft-no-tools.jsonl.zip",
+        "/mnt/workspace/.cache/modelscope/datasets/openmoss--moss-003-sft-data/snapshots/*/moss-003-sft-no-tools.jsonl.zip",
+    ]
+    import glob
+    for pattern in candidates:
+        matches = glob.glob(os.path.expanduser(pattern))
+        if matches:
+            return matches[0]
+    return ""
+
+
+def convert_moss(input_path: str = None, output_path: str = "data/moss_sft.jsonl", max_lines: int = None):
     """
     将 MOSS 原始 zip 文件转换为标准对话格式。
 
     参数:
-        input_path: moss-003-sft-no-tools.jsonl.zip 路径
+        input_path: moss-003-sft-no-tools.jsonl.zip 路径（None 自动查找）
         output_path: 输出 JSONL 文件路径
         max_lines: 最多提取多少条（None=全部）
     """
+    if not input_path:
+        input_path = find_moss_zip()
+    if not input_path or not os.path.exists(input_path):
+        print(f"❌ 未找到 MOSS zip 文件")
+        return 0
+
+    print(f"📦 MOSS zip: {input_path}")
     count = 0
     os.makedirs(os.path.dirname(output_path) or ".", exist_ok=True)
 
@@ -76,11 +97,7 @@ def convert_moss(input_path: str, output_path: str, max_lines: int = None):
 if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="MOSS 数据集清洗")
-    parser.add_argument("--input", type=str,
-                        default=os.path.expanduser(
-                            "~/.cache/modelscope/datasets/"
-                            "openmoss--moss-003-sft-data/snapshots/"
-                            "master/moss-003-sft-no-tools.jsonl.zip"),
+    parser.add_argument("--input", type=str, default=None,
                         help="MOSS zip 文件路径")
     parser.add_argument("--output", type=str, default="data/moss_sft.jsonl",
                         help="输出文件路径")
