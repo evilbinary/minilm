@@ -41,7 +41,7 @@ def find_moss_zip() -> str:
     return ""
 
 
-def convert_moss(input_path: str = None, output_path: str = "data/moss_sft.jsonl", max_lines: int = None):
+def convert_moss(input_path: str = None, output_path: str = "data/sft/moss_sft.jsonl", max_lines: int = None):
     """
     将 MOSS 原始 zip 文件转换为标准对话格式。
 
@@ -99,7 +99,7 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="MOSS 数据集清洗")
     parser.add_argument("--input", type=str, default=None,
                         help="MOSS zip 文件路径")
-    parser.add_argument("--output", type=str, default="data/moss_sft.jsonl",
+    parser.add_argument("--output", type=str, default="data/sft/moss_sft.jsonl",
                         help="输出文件路径")
     parser.add_argument("--max-lines", type=int, default=10000,
                         help="最多提取条数（默认 10000）")
