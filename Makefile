@@ -12,7 +12,11 @@ PRETRAIN_RESUME_ARGS ?= --preset 200M --max-iters 100000 --batch-size 4
 SFT_DATA ?= data/sft/sft_t2t_mini.jsonl data/sft/moss_sft.jsonl data/sft/yuki_ruozhiba_1.5k.jsonl
 SFT_ARGS ?= --preset 200M --batch-size 4 --max-iters 50000 --lr 1e-4
 
+download:
+	python download_data.py
+
 help:
+	@echo "  make download       下载默认数据集"
 	@echo "Mini GPT — 两阶段训练"
 	@echo ""
 	@echo "── 第一阶段：预训练 ──"
