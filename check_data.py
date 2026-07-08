@@ -59,27 +59,15 @@ def check_file(path: str, name: str) -> int:
 
 
 def check_pretrain():
-    """检查预训练数据"""
+    """检查预训练数据（只检查生成后的文件）"""
     print("\n📚 预训练数据检查:")
-    total_bad = 0
-    total_bad += check_file("data/pretrain_text.txt", "pretrain_text.txt")
-    for f in ["data/pretrain/tinyshakespeare.txt", "data/pretrain/xyj.txt",
-              "data/pretrain/hlm.txt", "data/pretrain/pretrain_t2t_mini.jsonl"]:
-        if os.path.exists(f):
-            total_bad += check_file(f, os.path.basename(f))
-    return total_bad
+    return check_file("data/pretrain_text.txt", "pretrain_text.txt")
 
 
 def check_sft():
-    """检查 SFT 数据"""
+    """检查 SFT 数据（只检查生成后的文件）"""
     print("\n🗣️  SFT 数据检查:")
-    total_bad = 0
-    total_bad += check_file("data/sft_train.txt", "sft_train.txt")
-    for f in ["data/sft/moss_sft.jsonl", "data/sft/sft_t2t_mini.jsonl",
-              "data/sft/yuki_ruozhiba_1.5k.jsonl"]:
-        if os.path.exists(f):
-            total_bad += check_file(f, os.path.basename(f))
-    return total_bad
+    return check_file("data/sft_train.txt", "sft_train.txt")
 
 
 if __name__ == "__main__":

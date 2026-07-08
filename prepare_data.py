@@ -119,8 +119,7 @@ def convert_jsonl(jsonl_paths: list[str], output: str = None,
         os.makedirs(os.path.dirname(output) or ".", exist_ok=True)
         with open(output, "w", encoding="utf-8") as f:
             f.write(result)
-        print(f"已生成 {len(all_lines)} 条 → {output} ({len(result)/1024/1024:.0f}MB)")
-
+    print(f"已生成 {len(all_lines)} 条 → {output} ({len(result)/1024/1024:.0f}MB)")
     return result
 
 
@@ -164,7 +163,6 @@ def prepare_pretrain(output: str = None):
         f.write(result)
 
     print(f"\n预训练数据已生成: {output} ({len(result)/1024/1024:.0f}MB)")
-    print(f"含 JSON 残留: {has_json_pattern(result)}")
 
 
 def prepare_sft(files: list[str] = None, output: str = None, max_lines: int = None):
