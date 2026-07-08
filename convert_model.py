@@ -56,10 +56,40 @@ def export_gguf(sd, config, output: str = "model.gguf"):
     writer.add_embedding_length(d_model)
     writer.add_feed_forward_length(config.d_ff)
     writer.add_head_count(n_heads)
-    writer.add_layer_norm_eps(1e-5)  # gpt2.attention.layer_norm_epsilon
+    writer.add_layer_norm_eps(1e-5)
     writer.add_head_count_kv(n_heads)
-    writer.add_rope_freq_base(10000.0)
-    writer.add_rope_scaling_type(gguf.RopeScalingType.NONE)
+
+    # ── 词表 ──
+    try:
+        import json
+        with open("checkpoint/tokenizer.json") as f:
+            tok_data = json.load(f)
+
+        writer.add_tokenizer_model("gpt2")
+
+        # 词表
+        vocab = tok_data.get("model", {}).get("vocab", {})
+        tokens = [""] * len(vocab)
+        for word, idx in vocab.items():
+            tokens[int(idx)] = word
+        writer.add_token_list(tokens)
+
+        # 添加特殊 token ID
+        writer.add_bos_token_id(3)
+        writer.add_eos_token_id(2)
+
+        # 添加 scores 和 merges（BPE 必需）
+        import math
+        scores = [0.0] + [-math.log((i+1)/(len(tokens)+1)) for i in range(len(tokens)-1)]
+        writer.add_token_scores(scores)
+        merges = tok_data.get("model", {}).get("merges", [])
+        # merges 是 [["a","b"], ...] 格式，转为 ["a b", ...]
+        merge_strings = [f"{m[0]} {m[1]}" if isinstance(m, list) else m for m in merges]
+        writer.add_token_merges(merge_strings)
+
+        print(f"  词表: {len(tokens)} tokens, {len(merges)} merges")
+    except Exception as e:
+        print(f"  ⚠ tokenizer 加载失败: {e}")
 
     # ── 词嵌入 ──
     writer.add_tensor("token_embd.weight", sd["token_embedding.weight"].numpy())
@@ -76,15 +106,9 @@ def export_gguf(sd, config, output: str = "model.gguf"):
         writer.add_tensor(f"blk.{i}.attn_norm.weight", sd[f"{prefix}ln1.weight"].numpy())
         writer.add_tensor(f"blk.{i}.attn_norm.bias",   sd[f"{prefix}ln1.bias"].numpy())
 
-        # QKV → 拆分为 Q, K, V
-        qkv_w = sd[f"{prefix}attn.qkv.weight"].numpy()
-        qkv_b = sd[f"{prefix}attn.qkv.bias"].numpy()
-        writer.add_tensor(f"blk.{i}.attn_q.weight", qkv_w[:d_model])
-        writer.add_tensor(f"blk.{i}.attn_q.bias",   qkv_b[:d_model])
-        writer.add_tensor(f"blk.{i}.attn_k.weight", qkv_w[d_model:2*d_model])
-        writer.add_tensor(f"blk.{i}.attn_k.bias",   qkv_b[d_model:2*d_model])
-        writer.add_tensor(f"blk.{i}.attn_v.weight", qkv_w[2*d_model:])
-        writer.add_tensor(f"blk.{i}.attn_v.bias",   qkv_b[2*d_model:])
+        # QKV（合并的，不拆分）
+        writer.add_tensor(f"blk.{i}.attn_qkv.weight", sd[f"{prefix}attn.qkv.weight"].numpy())
+        writer.add_tensor(f"blk.{i}.attn_qkv.bias",   sd[f"{prefix}attn.qkv.bias"].numpy())
 
         # Attention 输出
         writer.add_tensor(f"blk.{i}.attn_output.weight", sd[f"{prefix}attn.out.weight"].numpy())
