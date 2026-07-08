@@ -81,18 +81,26 @@ MOSS_ZIP = os.path.expanduser(
 def download_sft():
     print("\n🗣️  SFT 数据:")
     # MOSS 数据
-    if os.path.exists(MOSS_ZIP):
-        print(f"  ✅ MOSS 数据集: 已存在 ({os.path.getsize(MOSS_ZIP)/1024/1024:.0f}MB)")
+    moss_data = DATA_DIR + "/data/sft/moss_sft.jsonl"
+    if os.path.exists(moss_data):
+        print(f"  ✅ MOSS 数据集: 已提取 ({os.path.getsize(moss_data)/1024/1024:.0f}MB)")
+    elif os.path.exists(MOSS_ZIP):
+        print("  ⏳ 提取 MOSS 数据...")
+        os.system("python prepare_moss.py --max-lines 200000")
     else:
-        print("  ⏳ MOSS 未下载，执行:")
-        print("     modelscope download --dataset openmoss/moss-003-sft-data")
+        print("  ⏳ 下载 MOSS 数据集...")
+        ret = os.system("modelscope download --dataset openmoss/moss-003-sft-data 2>/dev/null")
+        if ret == 0:
+            print("  ⏳ 提取 MOSS 数据...")
+            os.system("python prepare_moss.py --max-lines 200000")
+        else:
+            print("  ⚠️  modelscope 下载失败，请手动执行:")
+            print("     pip install modelscope && modelscope download --dataset openmoss/moss-003-sft-data")
 
     SFT_URL = "https://www.modelscope.cn/datasets/gongjy/minimind_dataset/resolve/master/"
     download(f"{SFT_URL}sft_t2t_mini.jsonl", DATA_DIR + "/data/sft/sft_t2t_mini.jsonl", "SFT 问答数据")
-    # yuki 在代码仓库中，检查是否存在
-    yuki = DATA_DIR + "/data/sft/yuki_ruozhiba_1.5k.jsonl"
-    if os.path.exists(yuki):
-        print(f"  ✅ yuki_ruozhiba_1.5k.jsonl: 已存在")
+    download("https://www.modelscope.cn/datasets/gongjy/minimind_dataset/resolve/master/yuki_ruozhiba_1.5k.jsonl",
+             DATA_DIR + "/data/sft/yuki_ruozhiba_1.5k.jsonl", "yuki 傲娇对话")
 
 
 
