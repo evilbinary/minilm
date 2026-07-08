@@ -10,3 +10,4 @@ data/agent_rl_math.jsonl
 data/*
 checkpoint/tokenizer.json
 cache/
+convert_model.py

@@ -5,6 +5,10 @@ CHAT_ARGS ?= --temperature 0.8 --device cpu
 MODEL_LANG ?= both
 
 BATCH_SIZE ?= 4
+PROMPT ?= "你好"
+N_TOKENS ?= 256
+THREADS ?= 8
+TEMP ?= 0.8
 
 # ── 预训练参数 ──
 PRETRAIN_ARGS ?= --preset 200M --max-iters 50000 --batch-size $(BATCH_SIZE)
@@ -66,8 +70,32 @@ sft-resume:
 chat-sft:
 	python chat.py --mode combined --checkpoint checkpoint/minigpt_sft.pt $(CHAT_ARGS)
 
-# ── 清理 ──
 
+# ── 导出 ──
+
+LLAMA_DIR ?= llama.cpp
+
+setup-llama:
+	@if [ ! -d "$(LLAMA_DIR)" ]; then \
+		echo "下载 llama.cpp..."; \
+		git clone --depth 1 https://github.com/ggerganov/llama.cpp.git $(LLAMA_DIR); \
+	fi
+	@if [ ! -f "$(LLAMA_DIR)/build/bin/llama-cli" ]; then \
+		echo "编译 llama.cpp..."; \
+		cd $(LLAMA_DIR) && mkdir -p build && cd build && cmake .. -DLLAMA_CUDA=OFF && make -j4 llama-cli 2>/dev/null; \
+	fi
+	@echo "✅ llama.cpp 就绪"
+
+chat-llama: setup-llama gguf
+	./$(LLAMA_DIR)/build/bin/llama-cli -m model.gguf -p "$(PROMPT)" -n $(N_TOKENS) -t $(THREADS) --temp $(TEMP)
+
+gguf:
+	python convert_model.py gguf --checkpoint checkpoint/minigpt_pretrain.pt --output model.gguf
+
+onnx:
+	python convert_model.py onnx --checkpoint checkpoint/minigpt_sft.pt --output model.onnx
+
+# ── 清理 ──
 clean:
 	rm -rf checkpoint
 	rm -rf __pycache__

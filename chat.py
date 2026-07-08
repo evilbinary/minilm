@@ -1,3 +1,5 @@
+import warnings
+warnings.filterwarnings("ignore", message=".*quantize_dynamic.*deprecated.*")
 """
 Chat — 交互式文本生成。
 
