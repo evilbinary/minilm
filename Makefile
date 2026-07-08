@@ -1,4 +1,4 @@
-.PHONY: help tokenizer pretrain sft chat-pretrain chat-sft clean
+.PHONY: help download prepare tokenizer pretrain sft pretrain-resume sft-resume chat-pretrain chat-sft check clean
 
 # ── 通用 ──
 CHAT_ARGS ?= --temperature 0.8
@@ -13,42 +13,34 @@ SFT_DATA ?= data/sft/sft_t2t_mini.jsonl data/sft/moss_sft.jsonl data/sft/yuki_ru
 SFT_ARGS ?= --preset 200M --batch-size 4 --max-iters 50000 --lr 1e-4
 
 download:
+	python download_data.py
+
+prepare: download
+	python prepare_data.py pretrain
+	python prepare_data.py sft
+
+tokenizer: prepare
+	python tokenizer.py --files data/pretrain/tinyshakespeare.txt data/pretrain/xyj.txt data/pretrain/hlm.txt data/sft/yuki_ruozhiba_1.5k.jsonl --save checkpoint/tokenizer.json
 
 check:
 	python3 check_data.py
 
 help:
-	@echo "  make download       下载默认数据集"
-	@echo "  make check          检查数据质量"
-	@echo "Mini GPT — 两阶段训练"
+	@echo "Mini GPT — Makefile"
 	@echo ""
-	@echo "── 第一阶段：预训练 ──"
-	@echo "  make tokenizer        训练 BPE tokenizer"
-	@echo "  make pretrain         在文本数据上预训练"
-	@echo "  make pretrain-resume  续训预训练"
-	@echo "  make chat-pretrain    预训练模型聊天"
-	@echo ""
-	@echo "── 第二阶段：SFT 微调 ──"
-	@echo "  make sft              从预训练模型微调对话"
-	@echo "  make sft-resume       续训微调"
-	@echo "  make chat-sft         SFT 模型聊天"
-	@echo ""
-	@echo "── 通用 ──"
-	@echo "  make clean            删除训练产物"
-	@echo ""
-	@echo "示例:"
-	@echo "  make pretrain PRETRAIN_ARGS='--max-iters 100000'"
-	@echo "  make sft     SFT_DATA=data/yuki_ruozhiba_1.5k.jsonl"
-
-# ── Tokenizer ──
-
-tokenizer:
-	python tokenizer.py --files data/pretrain/tinyshakespeare.txt data/pretrain/xyj.txt data/pretrain/hlm.txt data/sft/yuki_ruozhiba_1.5k.jsonl --save checkpoint/tokenizer.json
+	@echo "  make download       下载原始数据"
+	@echo "  make prepare        下载 + 生成训练数据"
+	@echo "  make tokenizer      训练 BPE (自动先下载+准备)"
+	@echo "  make pretrain       预训练 (自动全流程)"
+	@echo "  make sft            SFT 微调 (自动全流程)"
+	@echo "  make chat-pretrain  预训练模型聊天"
+	@echo "  make chat-sft       SFT 模型聊天"
+	@echo "  make check          数据质量检查"
+	@echo "  make clean          清理"
 
 # ── 预训练 ──
 
 pretrain: tokenizer
-	python prepare_data.py pretrain
 	python minigpt.py --train --mode pretrain $(PRETRAIN_ARGS)
 
 pretrain-resume:
@@ -57,7 +49,7 @@ pretrain-resume:
 chat-pretrain:
 	python chat.py --checkpoint checkpoint/minigpt_pretrain.pt --temperature 0.8
 
-# ── SFT（从预训练模型微调）──
+# ── SFT ──
 
 sft: tokenizer
 	python minigpt.py --train --mode sft --resume-from checkpoint/minigpt_pretrain.pt \
