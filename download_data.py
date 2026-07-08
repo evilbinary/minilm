@@ -80,21 +80,6 @@ def download_sft():
     if os.path.exists(yuki):
         print(f"  ✅ yuki_ruozhiba_1.5k.jsonl: 已存在")
 
-    # 检查全部文件状态
-    expected = [
-        "data/pretrain/tinyshakespeare.txt",
-        "data/pretrain/xyj.txt",
-        "data/pretrain/hlm.txt",
-        "data/pretrain/pretrain_t2t_mini.jsonl",
-        "data/sft/sft_t2t_mini.jsonl",
-        "data/sft/yuki_ruozhiba_1.5k.jsonl",
-    ]
-    print("\n📋 文件清单:")
-    for p in expected:
-        full = os.path.join(DATA_DIR, p)
-        status = "✅" if os.path.exists(full) else "❌"
-        size = os.path.getsize(full) / 1024 / 1024 if os.path.exists(full) else 0
-        print(f"  {status} {p} ({size:.0f}MB)" if size else f"  {status} {p}")
 
 
 # ── 全部下载 ──
@@ -107,6 +92,14 @@ def download_all():
     os.makedirs(f"{DATA_DIR}/sft", exist_ok=True)
     download_pretrain()
     download_sft()
+    expected = [
+        "data/pretrain/tinyshakespeare.txt",
+        "data/pretrain/xyj.txt",
+        "data/pretrain/hlm.txt",
+        "data/pretrain/pretrain_t2t_mini.jsonl",
+        "data/sft/sft_t2t_mini.jsonl",
+        "data/sft/yuki_ruozhiba_1.5k.jsonl",
+    ]
     missing = [p for p in expected if not os.path.exists(os.path.join(DATA_DIR, p))]
     if missing:
         print(f"\n❌ 缺失 {len(missing)} 个文件，请手动下载:")
