@@ -159,14 +159,28 @@ def main():
 
         prompt_ids = torch.tensor(tokenizer.encode(input_text), dtype=torch.long).unsqueeze(0).to(device)
 
-        with torch.no_grad():
-            out_ids = model.generate(
-                prompt_ids,
-                max_new_tokens=args.max_new_tokens,
-                temperature=temp,
-                top_k=topk,
-                eos_id=eos_id,
-            )
+        try:
+            with torch.no_grad():
+                out_ids = model.generate(
+                    prompt_ids,
+                    max_new_tokens=args.max_new_tokens,
+                    temperature=temp,
+                    top_k=topk,
+                    eos_id=eos_id,
+                )
+        except torch.OutOfMemoryError:
+            print("  ⚠ GPU 显存不足，自动切换到 CPU")
+            device = "cpu"
+            model.to(device)
+            prompt_ids = prompt_ids.to(device)
+            with torch.no_grad():
+                out_ids = model.generate(
+                    prompt_ids,
+                    max_new_tokens=args.max_new_tokens,
+                    temperature=temp,
+                    top_k=topk,
+                    eos_id=eos_id,
+                )
 
         generated = tokenizer.decode(out_ids[0].tolist())
 

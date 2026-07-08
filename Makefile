@@ -1,7 +1,7 @@
 .PHONY: help download prepare tokenizer pretrain sft pretrain-resume sft-resume chat-pretrain chat-sft check clean
 
 # ── 通用 ──
-CHAT_ARGS ?= --temperature 0.8
+CHAT_ARGS ?= --temperature 0.8 --device cpu
 MODEL_LANG ?= both
 
 BATCH_SIZE ?= 4
@@ -52,7 +52,7 @@ pretrain-resume:
 	python minigpt.py --train --mode pretrain --resume $(PRETRAIN_RESUME_ARGS)
 
 chat-pretrain:
-	python chat.py --checkpoint checkpoint/minigpt_pretrain.pt --temperature 0.8
+	python chat.py --checkpoint checkpoint/minigpt_pretrain.pt $(CHAT_ARGS)
 
 # ── SFT ──
 
